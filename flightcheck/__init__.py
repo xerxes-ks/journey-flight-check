@@ -1,0 +1,23 @@
+"""flightcheck: live flight status, delay prediction, and connection-risk scoring.
+
+v0.1 is stateless. Scheduling, messaging, and trip manifests belong to callers.
+"""
+
+from .cadence import poll_interval
+from .check import check_flight
+from .exceptions import AeroAPIError, BudgetExceeded, CheckError
+from .model import CheckRequest, OnwardRequest, Prior
+
+__version__ = "0.1.0"
+
+__all__ = [
+    "AeroAPIError",
+    "BudgetExceeded",
+    "CheckError",
+    "CheckRequest",
+    "OnwardRequest",
+    "Prior",
+    "check_flight",
+    "poll_interval",
+    "__version__",
+]

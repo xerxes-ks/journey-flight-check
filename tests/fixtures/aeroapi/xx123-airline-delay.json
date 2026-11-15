@@ -1,0 +1,47 @@
+{
+  "flights": [
+    {
+      "ident": "XXX123",
+      "ident_icao": "XXX123",
+      "ident_iata": "XX123",
+      "fa_flight_id": "XXX123-1700000000-airline-0001",
+      "operator": "XXX",
+      "operator_icao": "XXX",
+      "operator_iata": "XX",
+      "flight_number": "123",
+      "registration": "N123XX",
+      "inbound_fa_flight_id": "XXX122-1700000000-airline-0002",
+      "cancelled": false,
+      "diverted": false,
+      "origin": {
+        "code": "KXXA",
+        "code_icao": "KXXA",
+        "code_iata": "XXA",
+        "timezone": "America/New_York",
+        "name": "Example Municipal",
+        "city": "Exampleton"
+      },
+      "destination": {
+        "code": "KXXB",
+        "code_icao": "KXXB",
+        "code_iata": "XXB",
+        "timezone": "America/Chicago",
+        "name": "Example Regional",
+        "city": "Sample City"
+      },
+      "scheduled_out": "2027-03-15T18:00:00Z",
+      "estimated_out": "2027-03-15T18:20:00Z",
+      "actual_out": null,
+      "scheduled_in": "2027-03-15T21:00:00Z",
+      "estimated_in": "2027-03-15T21:20:00Z",
+      "actual_in": null,
+      "status": "Scheduled / Delayed",
+      "aircraft_type": "B738",
+      "baggage_claim": "4",
+      "gate_origin": "A12",
+      "gate_destination": "B4",
+      "terminal_origin": "1",
+      "terminal_destination": "2"
+    }
+  ]
+}

@@ -1,0 +1,275 @@
+"""Dataclasses for requests, resolved flights, predictions, and connection risk."""
+
+from __future__ import annotations
+
+import datetime as dt
+from dataclasses import asdict, dataclass, field
+from typing import Any, Optional
+from zoneinfo import ZoneInfo
+
+UTC = dt.timezone.utc
+BANDS = ["on_track", "watch", "at_risk"]
+STATUSES = ("scheduled", "active", "landed", "cancelled", "diverted", "unknown")
+
+DEFAULT_BUDGET_USD = 0.05
+DEFAULT_MIN_TURN = 30
+DEFAULT_INBOUND_WINDOW_H = 6
+DEFAULT_MCT = 45
+DEFAULT_TERMINAL_CHANGE_MIN = 20
+DEFAULT_CHECKIN_CLOSE_MIN = 45
+# Personal-tier list price per result set for the endpoints used. Estimate only;
+# confirm on https://www.flightaware.com/commercial/aeroapi/ before relying on it.
+DEFAULT_COST_PER_CALL = 0.005
+
+
+def worst(*bands: str) -> str:
+    return max((b for b in bands if b in BANDS), key=BANDS.index, default="on_track")
+
+
+def parse_time(value) -> Optional[dt.datetime]:
+    if value is None or value == "":
+        return None
+    if isinstance(value, dt.datetime):
+        t = value
+    else:
+        t = dt.datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    if t.tzinfo is None:
+        t = t.replace(tzinfo=UTC)
+    return t.astimezone(UTC)
+
+
+def parse_date(value) -> dt.date:
+    if isinstance(value, dt.date) and not isinstance(value, dt.datetime):
+        return value
+    return dt.date.fromisoformat(str(value)[:10])
+
+
+def mins(delta: dt.timedelta) -> int:
+    return int(round(delta.total_seconds() / 60))
+
+
+def normalize_ident(ident: str) -> str:
+    return (ident or "").replace(" ", "").upper()
+
+
+@dataclass
+class Instant:
+    utc: str
+    local: str
+    timezone: str
+
+    @classmethod
+    def from_dt(cls, t: Optional[dt.datetime], tzname: Optional[str]) -> Optional["Instant"]:
+        if t is None:
+            return None
+        t = t.astimezone(UTC)
+        tz = tzname or "UTC"
+        try:
+            local = t.astimezone(ZoneInfo(tz))
+        except Exception:
+            tz = "UTC"
+            local = t
+        return cls(
+            utc=t.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            local=local.isoformat(timespec="seconds"),
+            timezone=tz,
+        )
+
+    def to_dict(self) -> dict:
+        return {"utc": self.utc, "local": self.local, "timezone": self.timezone}
+
+
+@dataclass
+class Prior:
+    dep_median: int = 0
+    arr_median: int = 0
+    n: int = 0
+    source: str = ""
+
+
+@dataclass
+class OnwardRequest:
+    ident: str
+    date: Optional[str] = None
+    origin: Optional[str] = None
+    min_connection_min: int = DEFAULT_MCT
+    terminal_change: bool = False
+    terminal_change_min: int = DEFAULT_TERMINAL_CHANGE_MIN
+    bag_recheck: bool = False
+    checkin_close_min: int = DEFAULT_CHECKIN_CLOSE_MIN
+    separate_ticket: bool = False
+
+
+@dataclass
+class CheckRequest:
+    ident: str
+    date: str
+    origin: Optional[str] = None
+    onward: Optional[OnwardRequest] = None
+    budget_usd: float = DEFAULT_BUDGET_USD
+    min_turn: int = DEFAULT_MIN_TURN
+    inbound_window_h: float = DEFAULT_INBOUND_WINDOW_H
+    prior: Optional[Prior] = None
+    cost_per_call: float = DEFAULT_COST_PER_CALL
+
+
+@dataclass
+class Inbound:
+    ident: str
+    est_arr: Optional[dt.datetime] = None
+    status: str = ""
+    origin_tz: str = "UTC"
+
+    def to_dict(self) -> dict:
+        inst = Instant.from_dt(self.est_arr, self.origin_tz)
+        return {
+            "ident": self.ident,
+            "est_arr": inst.to_dict() if inst else None,
+            "status": self.status,
+        }
+
+
+@dataclass
+class Flight:
+    ident: str
+    ident_iata: str = ""
+    ident_icao: str = ""
+    fa_flight_id: str = ""
+    origin: str = ""
+    destination: str = ""
+    origin_tz: str = "UTC"
+    dest_tz: str = "UTC"
+    sched_out: Optional[dt.datetime] = None
+    est_out: Optional[dt.datetime] = None
+    act_out: Optional[dt.datetime] = None
+    sched_in: Optional[dt.datetime] = None
+    est_in: Optional[dt.datetime] = None
+    act_in: Optional[dt.datetime] = None
+    gate_origin: str = ""
+    gate_destination: str = ""
+    terminal_origin: str = ""
+    terminal_destination: str = ""
+    baggage_claim: str = ""
+    aircraft_type: str = ""
+    registration: str = ""
+    status: str = "unknown"
+    cancelled: bool = False
+    diverted: bool = False
+    divert_to: str = ""
+    source: str = "schedule"
+    live: bool = False
+    inbound: Optional[Inbound] = None
+
+    def to_dict(self) -> dict:
+        def t(value, tz):
+            inst = Instant.from_dt(value, tz)
+            return inst.to_dict() if inst else None
+
+        return {
+            "ident": self.ident,
+            "ident_iata": self.ident_iata,
+            "ident_icao": self.ident_icao,
+            "fa_flight_id": self.fa_flight_id,
+            "origin": self.origin,
+            "destination": self.destination,
+            "scheduled_out": t(self.sched_out, self.origin_tz),
+            "estimated_out": t(self.est_out, self.origin_tz),
+            "actual_out": t(self.act_out, self.origin_tz),
+            "scheduled_in": t(self.sched_in, self.dest_tz),
+            "estimated_in": t(self.est_in, self.dest_tz),
+            "actual_in": t(self.act_in, self.dest_tz),
+            "gate_origin": self.gate_origin,
+            "gate_destination": self.gate_destination,
+            "terminal_origin": self.terminal_origin,
+            "terminal_destination": self.terminal_destination,
+            "baggage_claim": self.baggage_claim,
+            "aircraft_type": self.aircraft_type,
+            "registration": self.registration,
+            "status": self.status,
+            "cancelled": self.cancelled,
+            "diverted": self.diverted,
+            "divert_to": self.divert_to,
+            "source": self.source,
+            "live": self.live,
+        }
+
+
+@dataclass
+class Prediction:
+    dep_delay_min: int
+    arr_delay_min: int
+    pred_out: Optional[dt.datetime]
+    pred_in: Optional[dt.datetime]
+    band: str
+    reasons: list
+    final: bool = False
+    schedule_only: bool = False
+    airline_dep_delay: Optional[int] = None
+    origin_tz: str = "UTC"
+    dest_tz: str = "UTC"
+
+    def to_dict(self) -> dict:
+        out = Instant.from_dt(self.pred_out, self.origin_tz)
+        inn = Instant.from_dt(self.pred_in, self.dest_tz)
+        return {
+            "dep_delay_min": self.dep_delay_min,
+            "arr_delay_min": self.arr_delay_min,
+            "expected_out": out.to_dict() if out else None,
+            "expected_in": inn.to_dict() if inn else None,
+            "band": self.band,
+            "reasons": list(self.reasons),
+            "final": self.final,
+            "schedule_only": self.schedule_only,
+        }
+
+
+@dataclass
+class ConnectionRisk:
+    band: str
+    slack_min: int
+    required_min: int
+    protected: bool
+    explain: str
+    onward_ident: str = ""
+
+    def to_dict(self) -> dict:
+        return {
+            "band": self.band,
+            "slack_min": self.slack_min,
+            "required_min": self.required_min,
+            "protected": self.protected,
+            "explain": self.explain,
+            "onward_ident": self.onward_ident,
+        }
+
+
+@dataclass
+class CallRecord:
+    path: str
+    params: dict
+    http: int
+    cost_usd: float
+    ms: int
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+@dataclass
+class CheckResult:
+    flight: Flight
+    inbound: Optional[Inbound]
+    prediction: Prediction
+    connection: Optional[ConnectionRisk]
+    calls: list = field(default_factory=list)
+    cost_usd_est: float = 0.0
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "flight": self.flight.to_dict(),
+            "inbound": self.inbound.to_dict() if self.inbound else None,
+            "prediction": self.prediction.to_dict(),
+            "connection": self.connection.to_dict() if self.connection else None,
+            "calls": [c.to_dict() if hasattr(c, "to_dict") else c for c in self.calls],
+            "cost_usd_est": self.cost_usd_est,
+        }

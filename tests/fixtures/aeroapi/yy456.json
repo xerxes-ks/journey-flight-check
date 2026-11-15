@@ -1,0 +1,47 @@
+{
+  "flights": [
+    {
+      "ident": "YYY456",
+      "ident_icao": "YYY456",
+      "ident_iata": "YY456",
+      "fa_flight_id": "YYY456-1700000100-airline-0003",
+      "operator": "YYY",
+      "operator_icao": "YYY",
+      "operator_iata": "YY",
+      "flight_number": "456",
+      "registration": "N456YY",
+      "inbound_fa_flight_id": null,
+      "cancelled": false,
+      "diverted": false,
+      "origin": {
+        "code": "KXXB",
+        "code_icao": "KXXB",
+        "code_iata": "XXB",
+        "timezone": "America/Chicago",
+        "name": "Example Regional",
+        "city": "Sample City"
+      },
+      "destination": {
+        "code": "KXXD",
+        "code_icao": "KXXD",
+        "code_iata": "XXD",
+        "timezone": "America/Denver",
+        "name": "Example International",
+        "city": "Faketown"
+      },
+      "scheduled_out": "2027-03-15T22:30:00Z",
+      "estimated_out": "2027-03-15T22:30:00Z",
+      "actual_out": null,
+      "scheduled_in": "2027-03-16T01:00:00Z",
+      "estimated_in": "2027-03-16T01:00:00Z",
+      "actual_in": null,
+      "status": "Scheduled",
+      "aircraft_type": "A320",
+      "baggage_claim": "7",
+      "gate_origin": "B9",
+      "gate_destination": "C3",
+      "terminal_origin": "2",
+      "terminal_destination": "1"
+    }
+  ]
+}

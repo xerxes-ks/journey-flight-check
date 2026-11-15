@@ -1,0 +1,218 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/xerxes-ks/journey-flight-check/schema/check_flight.tool.json",
+  "name": "check_flight",
+  "description": "Look up a flight by number and date, return live status (UTC and local times, gates, terminals, baggage, aircraft, registration), a delay prediction from the airline estimate then inbound aircraft ETA plus a minimum turn then an optional historical prior, optional connection risk versus an onward flight, and the AeroAPI calls made with an estimated cost. Stateless: callers own scheduling and messaging.",
+  "inputSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["ident", "date"],
+    "properties": {
+      "ident": {
+        "type": "string",
+        "description": "Flight number (IATA or ICAO designator), e.g. XX123.",
+        "minLength": 2
+      },
+      "date": {
+        "type": "string",
+        "format": "date",
+        "description": "Departure date (YYYY-MM-DD). Matched against the origin-local scheduled-out date, with UTC as fallback."
+      },
+      "origin": {
+        "type": "string",
+        "description": "Optional IATA departure airport used to disambiguate duplicate flight numbers.",
+        "minLength": 3,
+        "maxLength": 4
+      },
+      "onward": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["ident"],
+        "properties": {
+          "ident": { "type": "string", "description": "Onward flight number." },
+          "date": { "type": "string", "format": "date" },
+          "origin": { "type": "string" },
+          "min_connection_min": { "type": "integer", "minimum": 0, "default": 45 },
+          "terminal_change": { "type": "boolean", "default": false },
+          "terminal_change_min": { "type": "integer", "minimum": 0, "default": 20 },
+          "bag_recheck": { "type": "boolean", "default": false },
+          "checkin_close_min": { "type": "integer", "minimum": 0, "default": 45 },
+          "separate_ticket": { "type": "boolean", "default": false }
+        }
+      },
+      "budget_usd": {
+        "type": "number",
+        "minimum": 0,
+        "default": 0.05,
+        "description": "Hard cap on estimated AeroAPI spend for this call."
+      },
+      "min_turn": {
+        "type": "integer",
+        "minimum": 0,
+        "default": 30,
+        "description": "Minimum minutes from inbound gate-in to this flight's push-back."
+      },
+      "inbound_window_h": {
+        "type": "number",
+        "minimum": 0,
+        "default": 6,
+        "description": "Only fetch the inbound aircraft when departure is within this many hours."
+      },
+      "prior": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "dep_median": { "type": "integer" },
+          "arr_median": { "type": "integer" },
+          "n": { "type": "integer", "minimum": 0 },
+          "source": { "type": "string" }
+        }
+      }
+    }
+  },
+  "outputSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["flight", "inbound", "prediction", "connection", "calls", "cost_usd_est"],
+    "properties": {
+      "flight": { "$ref": "#/$defs/flight" },
+      "inbound": {
+        "anyOf": [
+          { "type": "null" },
+          { "$ref": "#/$defs/inbound" }
+        ]
+      },
+      "prediction": { "$ref": "#/$defs/prediction" },
+      "connection": {
+        "anyOf": [
+          { "type": "null" },
+          { "$ref": "#/$defs/connection" }
+        ]
+      },
+      "calls": {
+        "type": "array",
+        "items": { "$ref": "#/$defs/call" }
+      },
+      "cost_usd_est": {
+        "type": "number",
+        "description": "Estimated AeroAPI spend for this check. Confirm against the FlightAware usage page."
+      }
+    }
+  },
+  "$defs": {
+    "instant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["utc", "local", "timezone"],
+      "properties": {
+        "utc": { "type": "string" },
+        "local": { "type": "string" },
+        "timezone": { "type": "string" }
+      }
+    },
+    "instantOrNull": {
+      "anyOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/instant" }
+      ]
+    },
+    "flight": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ident", "ident_iata", "ident_icao", "fa_flight_id",
+        "origin", "destination",
+        "scheduled_out", "estimated_out", "actual_out",
+        "scheduled_in", "estimated_in", "actual_in",
+        "gate_origin", "gate_destination",
+        "terminal_origin", "terminal_destination",
+        "baggage_claim", "aircraft_type", "registration",
+        "status", "cancelled", "diverted", "divert_to",
+        "source", "live"
+      ],
+      "properties": {
+        "ident": { "type": "string" },
+        "ident_iata": { "type": "string" },
+        "ident_icao": { "type": "string" },
+        "fa_flight_id": { "type": "string" },
+        "origin": { "type": "string" },
+        "destination": { "type": "string" },
+        "scheduled_out": { "$ref": "#/$defs/instantOrNull" },
+        "estimated_out": { "$ref": "#/$defs/instantOrNull" },
+        "actual_out": { "$ref": "#/$defs/instantOrNull" },
+        "scheduled_in": { "$ref": "#/$defs/instantOrNull" },
+        "estimated_in": { "$ref": "#/$defs/instantOrNull" },
+        "actual_in": { "$ref": "#/$defs/instantOrNull" },
+        "gate_origin": { "type": "string" },
+        "gate_destination": { "type": "string" },
+        "terminal_origin": { "type": "string" },
+        "terminal_destination": { "type": "string" },
+        "baggage_claim": { "type": "string" },
+        "aircraft_type": { "type": "string" },
+        "registration": { "type": "string" },
+        "status": {
+          "type": "string",
+          "enum": ["scheduled", "active", "landed", "cancelled", "diverted", "unknown"]
+        },
+        "cancelled": { "type": "boolean" },
+        "diverted": { "type": "boolean" },
+        "divert_to": { "type": "string" },
+        "source": { "type": "string", "enum": ["aeroapi", "schedule"] },
+        "live": { "type": "boolean" }
+      }
+    },
+    "inbound": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ident", "est_arr", "status"],
+      "properties": {
+        "ident": { "type": "string" },
+        "est_arr": { "$ref": "#/$defs/instantOrNull" },
+        "status": { "type": "string" }
+      }
+    },
+    "prediction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dep_delay_min", "arr_delay_min", "expected_out", "expected_in",
+        "band", "reasons", "final", "schedule_only"
+      ],
+      "properties": {
+        "dep_delay_min": { "type": "integer" },
+        "arr_delay_min": { "type": "integer" },
+        "expected_out": { "$ref": "#/$defs/instantOrNull" },
+        "expected_in": { "$ref": "#/$defs/instantOrNull" },
+        "band": { "type": "string", "enum": ["on_track", "watch", "at_risk"] },
+        "reasons": { "type": "array", "items": { "type": "string" } },
+        "final": { "type": "boolean" },
+        "schedule_only": { "type": "boolean" }
+      }
+    },
+    "connection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["band", "slack_min", "required_min", "protected", "explain", "onward_ident"],
+      "properties": {
+        "band": { "type": "string", "enum": ["on_track", "watch", "at_risk"] },
+        "slack_min": { "type": "integer" },
+        "required_min": { "type": "integer" },
+        "protected": { "type": "boolean" },
+        "explain": { "type": "string" },
+        "onward_ident": { "type": "string" }
+      }
+    },
+    "call": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "params", "http", "cost_usd", "ms"],
+      "properties": {
+        "path": { "type": "string" },
+        "params": { "type": "object" },
+        "http": { "type": "integer" },
+        "cost_usd": { "type": "number" },
+        "ms": { "type": "integer" }
+      }
+    }
+  }
+}
