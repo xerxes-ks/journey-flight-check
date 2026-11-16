@@ -21,12 +21,14 @@ def poll_interval(
     landed: bool = False,
     sched_arr: Optional[DateTime] = None,
     actual_dep: Optional[DateTime] = None,
+    est_arr: Optional[DateTime] = None,
 ) -> Optional[int]:
     """Minutes between polls, or None for 'do not poll' (T−48h or landed).
 
     none beyond T-48h, 3-hourly to T-6h, hourly to T-3h, 15-min through
     scheduled departure until actual off, then 30-60 min airborne
-    (30 if block time is 4h or less), stop at landing.
+    (30 if block time is 4h or less), 15 min once estimated arrival is
+    within 45 min, stop at landing.
 
     Airborne cadence keys off actual departure when known. After STD while
     still at the gate (no actual_dep), keep the 15-min cadence.
@@ -34,6 +36,9 @@ def poll_interval(
     if landed:
         return None
     if actual_dep is not None:
+        eta = est_arr or sched_arr
+        if eta is not None and (eta - now).total_seconds() <= 45 * 60:
+            return 15
         if sched_arr is not None and sched_dep is not None:
             block = sched_arr - sched_dep
             return 30 if block <= dt.timedelta(hours=4) else 60

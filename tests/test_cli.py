@@ -35,7 +35,8 @@ def test_cli_without_key_is_unknown():
     data = json.loads(proc.stdout)
     assert data["flight"]["status"] in ("unknown", "too_early")
     assert data["prediction"]["band"] == "unknown"
-    assert "FLIGHTAWARE_AEROAPI_KEY" in proc.stderr
+    assert "offline" in proc.stderr.lower()
+    assert data["cost_usd_est"] == 0
 
 
 def test_cli_help_mentions_live():
@@ -64,9 +65,12 @@ def test_cli_now_stays_offline_without_live(monkeypatch, capsys):
     rc = main(["check", "XX123", "2027-03-15", "--now", "2027-03-15T16:30:00Z", "--json"])
     assert rc == 0
     assert hits == []
-    data = json.loads(capsys.readouterr().out)
+    captured = capsys.readouterr()
+    data = json.loads(captured.out)
     assert data["flight"]["status"] in ("unknown", "too_early")
     assert data["next_check_local"] is not None
+    assert data["cost_usd_est"] == 0
+    assert "offline" in captured.err.lower()
 
 
 def test_cli_now_with_live_calls_adapter(monkeypatch, capsys):

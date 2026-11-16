@@ -54,7 +54,7 @@ def predict(flight: Flight, *, min_turn: int = 35, prior: Prior | None = None) -
         ad = mins(flight.act_in - sta)
         return pack(
             dd, ad, band_for(ad),
-            [f"landed {clock(flight.act_in, dest_tz, d)}"],
+            [f"landed {clock(flight.act_in, dest_tz, d, vs=sta)}"],
             final=True,
         )
 
@@ -76,11 +76,11 @@ def predict(flight: Flight, *, min_turn: int = 35, prior: Prior | None = None) -
     airline_dd = None
     if flight.act_out:
         dd = mins(flight.act_out - std)
-        cands.append((dd, f"left the gate at {clock(flight.act_out, origin_tz, o)}"))
+        cands.append((dd, f"left the gate at {clock(flight.act_out, origin_tz, o, vs=std)}"))
     else:
         if flight.est_out:
             airline_dd = mins(flight.est_out - std)
-            cands.append((airline_dd, f"airline now shows departure {clock(flight.est_out, origin_tz, o)}"))
+            cands.append((airline_dd, f"airline now shows departure {clock(flight.est_out, origin_tz, o, vs=std)}"))
         if flight.inbound and flight.inbound.est_arr:
             ready = flight.inbound.est_arr + dt.timedelta(minutes=min_turn)
             prop = max(0, mins(ready - std))
@@ -89,8 +89,8 @@ def predict(flight: Flight, *, min_turn: int = 35, prior: Prior | None = None) -
             in_iata = flight.inbound.dest_iata or o
             cands.append((
                 prop,
-                f"incoming aircraft ({ident}) reaches the gate {clock(flight.inbound.est_arr, in_tz, in_iata)}; "
-                f"with a {min_turn}-min turn the earliest departure is {clock(ready, origin_tz, o)}",
+                f"incoming aircraft ({ident}) reaches the gate {clock(flight.inbound.est_arr, in_tz, in_iata, vs=std)}; "
+                f"with a {min_turn}-min turn the earliest departure is {clock(ready, origin_tz, o, vs=std)}",
             ))
         if pr.n:
             cands.append((pr.dep_median, f"this flight usually leaves {pr.dep_median:+d} min (n={pr.n})"))
@@ -98,7 +98,7 @@ def predict(flight: Flight, *, min_turn: int = 35, prior: Prior | None = None) -
 
     if flight.est_in and (flight.act_out or flight.status == "active"):
         ad = mins(flight.est_in - sta)
-        reasons = [f"in the air, estimated arrival {clock(flight.est_in, dest_tz, d)}"]
+        reasons = [f"in the air, estimated arrival {clock(flight.est_in, dest_tz, d, vs=sta)}"]
     else:
         ad = dd - padding
         if flight.est_in:

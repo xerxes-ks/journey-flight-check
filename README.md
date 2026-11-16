@@ -78,7 +78,7 @@ poll_interval(sched_dep, now, landed=False, sched_arr=None, actual_dep=None)
 | T−48h to T−6h | every 3 hours |
 | T−6h to T−3h | every hour |
 | T−3h through scheduled departure, still at gate | every 15 minutes, until **actual** off |
-| Airborne | 30 min if block time ≤ 4h, else 60 min; keys off **actual** departure |
+| Airborne | 30 min if block time ≤ 4h, else 60 min; **15 min** once estimated arrival is within 45 min |
 | Landed / cancelled / diverted | stop (`final`, `next_check_local: null`) |
 | unknown / no_data before departure | 60 min, or when the local day becomes visible |
 
@@ -95,7 +95,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
 .venv/bin/python -m flightcheck check XX754 2027-12-13 --origin DEL --now 2027-12-11T12:00:00Z --live --json
 ```
 
-`--now` is a simulation clock (local or ISO) and **stays offline** (dry run / fixtures) unless **`--live`** is passed explicitly. Without `FLIGHTAWARE_AEROAPI_KEY`, there is no live lookup.
+`--now` is a simulation clock (local or ISO) and **stays offline** (dry run / fixtures) unless **`--live`** is passed explicitly. A dry run prints one line to stderr and costs $0. Without `FLIGHTAWARE_AEROAPI_KEY`, there is no live lookup.
 
 ## Library
 
@@ -153,7 +153,7 @@ Example output (on-time, truncated):
   "status": "scheduled",
   "band": "on_track",
   "final": false,
-  "summary": "XXA→XXB is on track, departing 14:00 Mon 15 Mar (XXA time).",
+  "summary": "XX123 XXA→XXB is on track, departing 14:00 Mon 15 Mar (XXA time).",
   "flight": {
     "ident_iata": "XX123",
     "origin": "XXA",

@@ -16,7 +16,6 @@ from .exceptions import AeroAPIError, BudgetExceeded, CheckError
 from .model import (
     UTC,
     BAND_HUMAN,
-    TOO_EARLY_HOURS,
     UNKNOWN_RETRY_MIN,
     WINDOW_END_MAX_AHEAD_H,
     CheckRequest,
@@ -28,7 +27,7 @@ from .model import (
 )
 from .predict import predict
 from .sanitize import redact, secret_values
-from .times import human_form, local_dict, parse_now_maybe
+from .times import format_delay, human_form, local_dict, parse_now_maybe
 from .turn import default_min_turn
 
 
@@ -136,18 +135,16 @@ def _local_midnight(day: dt.date, tzname: str) -> dt.datetime:
 
 
 def too_early_gate(day: dt.date, now: dt.datetime, origin: Optional[str]):
-    """If origin-local midnight of the ticket date is more than 48h out, skip AeroAPI.
+    """Skip AeroAPI until the local day could fall inside the ~47h window.
 
-    Exact STD is unknown until a live lookup. T is approximated as origin-local
-    midnight of the ticket date; next_check is T−48h in that zone. After the
-    first call, an empty window retries every 60 min so a cron never stalls.
-    When STD is known, next_check prefers T from scheduled_out.
+    Exact STD is unknown until a live lookup. Visibility is origin-local
+    midnight of the ticket date minus 47h (or scheduled_out minus 47h once
+    known). next_check jumps to that instant rather than retrying hourly.
     """
     tzname = tz_for_iata(origin) if origin else "UTC"
-    t = _local_midnight(day, tzname)
-    t_minus = t - dt.timedelta(hours=TOO_EARLY_HOURS)
-    if now.astimezone(t.tzinfo) < t_minus:
-        return t_minus, tzname
+    visible = _visible_from(day, tzname)
+    if now.astimezone(visible.tzinfo) < visible:
+        return visible, tzname
     return None, tzname
 
 
@@ -172,13 +169,31 @@ def _band_word(band: str) -> str:
     return BAND_HUMAN.get(band, (band or "unknown").replace("_", " "))
 
 
+def _ident_route(flight: Flight) -> str:
+    name = flight.ident_iata or flight.ident
+    if flight.origin and flight.destination:
+        return f"{name} {flight.origin}→{flight.destination}"
+    return name
+
+
 def _with_connection(sentence: str, conn=None, onward_ident: Optional[str] = None) -> str:
     sentence = (sentence or "").rstrip()
     if sentence and not sentence.endswith("."):
         sentence += "."
     if conn:
         name = conn.onward_ident or onward_ident or "the onward flight"
-        sentence += f" The connection to {name} is {_band_word(conn.band)}."
+        if conn.band == "at_risk":
+            if conn.slack_min < 0:
+                gap = f"{format_delay(-conn.slack_min)} short"
+            else:
+                gap = f"{format_delay(conn.slack_min)} spare"
+            extra = f" The connection to {name} is at risk ({gap})"
+            reason = (conn.explain or "").split(".")[0].strip()
+            if reason:
+                extra += f": {reason[0].lower() + reason[1:]}"
+            sentence += extra + "."
+        else:
+            sentence += f" The connection to {name} is {_band_word(conn.band)}."
     elif onward_ident:
         sentence += f" The connection to {onward_ident} has not been scored yet."
     return sentence
@@ -193,8 +208,7 @@ def _summarize(
     onward_ident: Optional[str] = None,
     ticket_date: Optional[str] = None,
 ) -> str:
-    name = flight.ident_iata or flight.ident
-    route = f"{flight.origin}→{flight.destination}" if flight.origin and flight.destination else name
+    name = _ident_route(flight)
     band_word = _band_word(pred.band)
 
     if flight.status == "too_early":
@@ -249,7 +263,7 @@ def _summarize(
         when = ""
         if pred.pred_out:
             when = f", departing {human_form(pred.pred_out, flight.origin, flight.origin_tz)}"
-        return _with_connection(f"{route} is on track{when}.", conn, onward_ident)
+        return _with_connection(f"{name} is on track{when}.", conn, onward_ident)
 
     reason = (pred.reasons or [""])[0].rstrip(".")
     if reason:
@@ -258,7 +272,7 @@ def _summarize(
     if reason:
         msg += f" {reason}."
     if pred.dep_delay_min:
-        msg += f" Expected departure delay {pred.dep_delay_min} min."
+        msg += f" Expected departure delay {format_delay(pred.dep_delay_min)}."
     return _with_connection(msg, conn, onward_ident)
 
 
@@ -288,26 +302,26 @@ def _next_check(
     if too_early_at is not None:
         return _pack_next(too_early_at, now, tzname, origin)
     if flight.sched_out:
+        visible = flight.sched_out - dt.timedelta(hours=WINDOW_END_MAX_AHEAD_H)
+        if now.astimezone(flight.sched_out.tzinfo) < visible:
+            return _pack_next(visible, now, tzname, origin)
         interval = poll_interval(
             flight.sched_out,
             now,
             landed=pred.final,
             sched_arr=flight.sched_in,
             actual_dep=flight.act_out,
+            est_arr=flight.est_in or pred.pred_in,
         )
         if interval is None:
-            t_minus = flight.sched_out - dt.timedelta(hours=TOO_EARLY_HOURS)
-            if now.astimezone(flight.sched_out.tzinfo) < t_minus:
-                return _pack_next(t_minus, now, tzname, origin)
             return _pack_next(now + dt.timedelta(minutes=UNKNOWN_RETRY_MIN), now, tzname, origin)
         return _pack_next(now + dt.timedelta(minutes=interval), now, tzname, origin)
-    # unknown / no_data and no STD yet: retry in 60 min, or when the local day
-    # could first fall inside AeroAPI's ~47h window.
-    nxt = now + dt.timedelta(minutes=UNKNOWN_RETRY_MIN)
+    # unknown / no_data and no STD yet: jump to visibility, never hourly before it.
     if ticket_day is not None:
         visible = _visible_from(ticket_day, tzname)
         if now.astimezone(visible.tzinfo) < visible:
-            nxt = visible
+            return _pack_next(visible, now, tzname, origin)
+    nxt = now + dt.timedelta(minutes=UNKNOWN_RETRY_MIN)
     return _pack_next(nxt, now, tzname, origin)
 
 

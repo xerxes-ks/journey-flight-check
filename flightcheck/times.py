@@ -47,14 +47,36 @@ def human_form(t: dt.datetime, airport: str = "", tzname: str = "") -> str:
     )
 
 
-def clock(t: Optional[dt.datetime], tzname: Optional[str], airport: str = "") -> str:
+def format_delay(minutes: int) -> str:
+    """Human delay: minutes, or hours and minutes once the delay is 90 min or more."""
+    m = abs(int(minutes))
+    if m < 90:
+        return f"{m} min"
+    hours, mins_ = divmod(m, 60)
+    if mins_ == 0:
+        return f"{hours} h"
+    return f"{hours} h {mins_} min"
+
+
+def clock(
+    t: Optional[dt.datetime],
+    tzname: Optional[str],
+    airport: str = "",
+    *,
+    vs: Optional[dt.datetime] = None,
+) -> str:
     if t is None:
         return "unknown"
     loc = as_local(t, tzname)
     if loc is None:
         return "unknown"
     suffix = f" ({airport} time)" if airport else ""
-    return f"{loc:%H:%M}{suffix}"
+    text = f"{loc:%H:%M}"
+    if vs is not None:
+        vs_loc = as_local(vs, tzname)
+        if vs_loc is not None and loc.date() != vs_loc.date():
+            text = f"{loc:%H:%M} {DOW[loc.weekday()]} {loc.day} {MON[loc.month - 1]}"
+    return f"{text}{suffix}"
 
 
 def local_dict(t: Optional[dt.datetime], tzname: Optional[str], airport: str = "") -> Optional[dict]:

@@ -71,3 +71,11 @@ def test_airborne_keys_off_actual_departure():
     arr = dep + dt.timedelta(hours=3)
     assert poll_interval(dep, now, False, arr) == 15
     assert poll_interval(dep, now, False, arr, actual_dep=actual) == 30
+
+
+def test_airborne_near_arrival_is_15():
+    dep, now, arr = t(-2.5, block_hours=3)  # 30 min before STA
+    assert poll_interval(dep, now, False, arr, actual_dep=dep, est_arr=arr) == 15
+    far_arr = dep + dt.timedelta(hours=8)
+    far_now = dep + dt.timedelta(hours=1)
+    assert poll_interval(dep, far_now, False, far_arr, actual_dep=dep, est_arr=far_arr) == 60

@@ -66,10 +66,10 @@ def main(argv=None) -> int:
             "separate_ticket": args.separate_ticket,
         }
     now = parse_now(args.now) if args.now else None
+    # --now is a dry run / fixture clock. Hit AeroAPI only with an explicit --live.
+    offline = bool(args.now) and not args.live
     try:
         req = parse_request(payload)
-        # --now is a dry run / fixture clock. Hit AeroAPI only with an explicit --live.
-        offline = bool(args.now) and not args.live
         result = check_flight(req, now=now, key="" if offline else None)
     except CheckError as exc:
         print(redact(exc), file=sys.stderr)
@@ -79,7 +79,9 @@ def main(argv=None) -> int:
         return 1
     data = result.to_dict()
     f, p = data["flight"], data["prediction"]
-    if not os.environ.get("FLIGHTAWARE_AEROAPI_KEY") and not f.get("live"):
+    if offline:
+        print("stayed offline (--now without --live); no AeroAPI request.", file=sys.stderr)
+    elif not os.environ.get("FLIGHTAWARE_AEROAPI_KEY") and not f.get("live"):
         print("  (no FLIGHTAWARE_AEROAPI_KEY; no live lookup)", file=sys.stderr)
     if args.json:
         print(json.dumps(data, indent=2))

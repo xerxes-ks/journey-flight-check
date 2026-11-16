@@ -20,7 +20,7 @@ def run(fetch, **extra):
 
 def test_on_track_summary_uses_human_band():
     r = run(scenario_fetch())
-    assert "on track" in r.summary
+    assert r.summary.startswith("XX123 XXA→XXB is on track")
     assert "worth watching" not in r.summary
     assert r.status == "scheduled"
     assert r.band == "on_track"
@@ -40,6 +40,7 @@ def test_watch_and_at_risk_summaries_are_not_run_ons():
 
     late = run(scenario_fetch(inbound="xx122-late.json"))
     assert late.prediction.band == "at_risk"
+    assert late.summary.startswith("XX123")
     assert "at risk." in late.summary
     assert "Expected departure delay 55 min." in late.summary
     # reason and delay are separate sentences, not glued together
@@ -124,6 +125,53 @@ def test_terminal_change_in_margin_and_schema_fields():
     )
     assert r.connection.required_min == 70
     assert "terminal change (25 min)" in r.connection.explain
+
+
+def test_delay_of_90_min_reads_in_hours():
+    body = load_fx("xx123-airline-delay.json")
+    body["flights"][0]["estimated_out"] = "2027-03-15T19:40:00Z"  # +100 min vs 18:00Z
+    r = run(make_fetch({
+        "/flights/XX123": (200, body),
+        "/flights/XXX123": (200, body),
+        "/flights/XXX122-1700000000-airline-0002": (200, load_fx("xx122.json")),
+    }))
+    assert r.prediction.dep_delay_min == 100
+    assert "1 h 40 min" in r.summary
+    assert "100 min" not in r.summary
+
+
+def test_at_risk_connection_summary_includes_shortfall_and_reason():
+    r = run(
+        scenario_fetch(inbound="xx122-late.json"),
+        onward={
+            "flight": "YY456",
+            "date": "2027-03-15",
+            "min_connect_min": 60,
+            "terminal_change": True,
+            "terminal_change_min": 20,
+            "bags_recheck": True,
+            "checkin_close_min": 45,
+            "separate_ticket": True,
+        },
+    )
+    assert r.connection.band == "at_risk"
+    assert r.connection.slack_min < 0
+    assert "short" in r.summary.lower()
+    assert "connection to yy456 is at risk" in r.summary.lower()
+    assert str(abs(r.connection.slack_min)) in r.summary or "h" in r.summary
+
+
+def test_reason_includes_day_when_date_differs():
+    inbound = load_fx("xx122.json")
+    # 01:00 Tue 16 Mar at XXA — next calendar day vs STD 14:00 Mon 15 Mar.
+    inbound["flights"][0]["estimated_in"] = "2027-03-16T05:00:00Z"
+    inbound["flights"][0]["scheduled_in"] = "2027-03-16T05:00:00Z"
+    r = run(make_fetch({
+        "/flights/XX123": (200, load_fx("xx123.json")),
+        "/flights/XXX123": (200, load_fx("xx123.json")),
+        "/flights/XXX122-1700000000-airline-0002": (200, inbound),
+    }))
+    assert "16 Mar" in r.prediction.reasons[0]
 
 
 def test_next_check_without_origin_is_labelled_utc():

@@ -36,10 +36,14 @@ def test_too_early_skips_api():
     assert r.next_check_local is not None
     assert r.next_check_local["tz"] == "America/Los_Angeles"
     assert r.next_check_in_minutes > 0
-    # T is local midnight 22 Mar LAX; T-48h is 20 Mar 00:00 local.
+    # Visibility is local midnight 22 Mar LAX minus 47h → 20 Mar local.
     assert "20 Mar" in r.next_check_local["human"] or "2027-03-20" in r.next_check_local["local"]
     assert "Live checks open" in r.summary
     assert "20 Mar" in r.summary or "LAX time" in r.summary
+    assert r.cost_usd_est == 0
+    assert r.summary.startswith("XX123")
+    # Jump to visibility (days away), not an hourly retry.
+    assert r.next_check_in_minutes > 60
 
 
 def test_unclamped_window_is_rejected_by_fake_fetch():
