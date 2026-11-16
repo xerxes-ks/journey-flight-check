@@ -115,6 +115,7 @@ class CheckRequest:
     cadence: str = "essential"
     alert_delay_min: int = DEFAULT_ALERT_DELAY_MIN
     previous_checkpoint: Optional[str] = None
+    previous_phase: Optional[str] = None
     attempts: int = 0
     previous_gate: Optional[str] = None
 

@@ -10,22 +10,22 @@ from flightcheck.cadence import poll_interval
 from flightcheck.model import UTC, parse_time
 from tests.conftest import NEAR_DEP, load_fx, make_fetch, scenario_fetch
 
-STD = parse_time("2027-12-12T21:25:00Z")  # 02:55 origin-local on 13 Dec
-STA = parse_time("2027-12-13T04:55:00Z")
+STD = parse_time("2027-06-22T08:40:00Z")  # 09:40 LHR on 22 Jun
+STA = parse_time("2027-06-22T15:40:00Z")
 
 
-def test_essential_plan_0255_sequence():
+def test_essential_plan_0940_sequence():
     times = []
     now = STD - dt.timedelta(days=10)
-    prev, att = None, 0
-    actual_off = actual_on = None
+    prev, att, prev_phase = None, 0, None
+    actual_off = actual_on = actual_in = None
     steps = 0
     while steps < 20:
         plan = essential_plan(
             now=now, std=STD, sta=STA,
             expected_off=STD, expected_arr=STA,
-            actual_off=actual_off, actual_on=actual_on,
-            previous_checkpoint=prev, attempts=att,
+            actual_off=actual_off, actual_on=actual_on, actual_in=actual_in,
+            previous_checkpoint=prev, previous_phase=prev_phase, attempts=att,
         )
         times.append((plan.checkpoint, now.astimezone(UTC).strftime("%Y-%m-%dT%H:%MZ")))
         if plan.final:
@@ -33,8 +33,11 @@ def test_essential_plan_0255_sequence():
         prev, att = plan.checkpoint, plan.attempts
         if plan.checkpoint == "takeoff":
             actual_off = STD + dt.timedelta(minutes=12)
-        if plan.checkpoint == "landing":
+            prev_phase = "airborne"
+        if plan.checkpoint == "landing" and actual_off and not actual_on:
             actual_on = STA
+            actual_in = STA + dt.timedelta(minutes=8)
+            prev_phase = "at_arrival_gate"
         now = plan.next_at
         steps += 1
     names = [c for c, _ in times]
@@ -42,22 +45,23 @@ def test_essential_plan_0255_sequence():
     assert "t_minus_6h" in names
     assert "t_minus_3h" in names
     assert "t_minus_1h" in names
+    assert "t_minus_30m" in names
     assert "takeoff" in names
     assert names[-1] == "done"
-    assert 6 <= len(names) <= 9
+    assert 7 <= len(names) <= 12
 
 
 def test_too_early_until_t_minus_24h():
     r = check_flight(
-        {"flight": "XX754", "date": "2027-12-13", "origin": "DEL"},
-        fetch=scenario_fetch(now="2027-12-11T12:00:00Z"),
-        now=parse_time("2027-12-11T12:00:00Z"),
+        {"flight": "XX123", "date": "2027-06-22", "origin": "LHR"},
+        fetch=scenario_fetch(now="2027-06-10T12:00:00Z"),
+        now=parse_time("2027-06-10T12:00:00Z"),
     )
     assert r.flight.status == "too_early"
     assert r.checkpoint == "t_minus_24h"
     assert r.calls == []
-    # STD unknown: T is origin-local midnight of the ticket date.
-    assert r.next_check_local["local"].startswith("2027-12-12T00:00")
+    # Unknown STD: first lookup is local noon of the previous day.
+    assert "21 Jun" in r.next_check_local["human"] or "2027-06-21" in r.next_check_local["local"]
 
 
 def test_inbound_only_at_t_minus_3h_and_1h():
@@ -308,7 +312,7 @@ def test_gate_change_and_retime_in_summary():
     low = r.summary.lower()
     assert "c7" in low
     assert "a12" in low
-    assert "retimed" in low
+    assert "moved from" in low
 
 
 def test_dense_cadence_still_available():

@@ -14,13 +14,14 @@ import datetime as dt
 from .model import (
     DEFAULT_ALERT_DELAY_MIN,
     ON_TRACK_MAX,
+    UTC,
     Flight,
     Prediction,
     Prior,
     mins,
     worst,
 )
-from .times import clock
+from .times import clock, format_delay
 
 
 def band_for(arr_delay: int, alert_delay_min: int = DEFAULT_ALERT_DELAY_MIN) -> str:
@@ -38,8 +39,10 @@ def predict(
     prior: Prior | None = None,
     alert_delay_min: int = DEFAULT_ALERT_DELAY_MIN,
     confirm_cancel: bool = False,
+    now: dt.datetime | None = None,
 ) -> Prediction:
     std, sta = flight.sched_out, flight.sched_in
+    now = now or dt.datetime.now(UTC)
     pr = prior or Prior()
     origin_tz, dest_tz = flight.origin_tz, flight.dest_tz
     o, d = flight.origin, flight.destination
@@ -68,7 +71,7 @@ def predict(
         return pack(
             dd, ad, band_for(ad, alert_delay_min),
             [f"landed {clock(flight.act_in, dest_tz, d, vs=sta)}"],
-            final=True,
+            final=False,
         )
 
     if not std or not sta or not flight.live:
@@ -95,6 +98,11 @@ def predict(
         else:
             cands.append((dd, f"left the gate at {clock(flight.act_out, origin_tz, o, vs=std)}"))
     else:
+        if std and now.astimezone(std.tzinfo) > std:
+            late = mins(now.astimezone(std.tzinfo) - std)
+            if flight.est_out:
+                late = max(late, mins(flight.est_out - std))
+            cands.append((late, f"departure delayed {format_delay(late)} past scheduled"))
         if flight.est_out:
             airline_dd = mins(flight.est_out - std)
             cands.append((airline_dd, f"airline now shows departure {clock(flight.est_out, origin_tz, o, vs=std)}"))

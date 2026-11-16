@@ -36,7 +36,7 @@ def test_too_early_skips_api():
     assert r.next_check_local is not None
     assert r.next_check_local["tz"] == "America/Los_Angeles"
     assert r.next_check_in_minutes > 0
-    # T-24h is local midnight 22 Mar LAX minus 24h → 21 Mar local.
+    # First lookup is local noon 22 Mar LAX minus 24h → noon 21 Mar local.
     assert "21 Mar" in r.next_check_local["human"] or "2027-03-21" in r.next_check_local["local"]
     assert "Live checks open" in r.summary
     assert "21 Mar" in r.summary or "LAX time" in r.summary

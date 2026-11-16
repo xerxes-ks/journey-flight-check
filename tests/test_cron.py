@@ -43,7 +43,7 @@ def test_cron_follows_next_check_from_30_days_out_to_landing():
     seen = set()
     checks = []
     steps = 0
-    prev_cp, prev_att = None, 0
+    prev_cp, prev_att, prev_phase = None, 0, None
     while steps < 40:
         r = check_flight(
             {
@@ -51,6 +51,7 @@ def test_cron_follows_next_check_from_30_days_out_to_landing():
                 "date": "2027-12-13",
                 "origin": "DEL",
                 "previous_checkpoint": prev_cp,
+                "previous_phase": prev_phase,
                 "attempts": prev_att,
             },
             fetch=_evolving_fetch(now),
@@ -58,8 +59,8 @@ def test_cron_follows_next_check_from_30_days_out_to_landing():
         )
         seen.add(r.flight.status)
         checks.append(r.checkpoint)
-        prev_cp, prev_att = r.checkpoint, r.attempts
-        if r.final or r.flight.status == "landed":
+        prev_cp, prev_att, prev_phase = r.checkpoint, r.attempts, r.phase
+        if r.final:
             assert r.next_check_local is None
             assert r.flight.status == "landed"
             break
@@ -74,7 +75,7 @@ def test_cron_follows_next_check_from_30_days_out_to_landing():
     assert "too_early" in seen
     assert "landed" in seen
     assert seen & {"unknown", "scheduled", "active"}
-    assert 6 <= steps <= 12
+    assert 6 <= steps <= 16
     assert "t_minus_24h" in checks
     assert "landing" in checks or "done" in checks
 

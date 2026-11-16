@@ -21,6 +21,7 @@ from .model import (
     DEFAULT_SELF_TRANSFER_MCT,
     TOO_EARLY_HOURS,
     UNKNOWN_RETRY_MIN,
+    WINDOW_END_MAX_AHEAD_H,
     CheckRequest,
     CheckResult,
     Flight,
@@ -32,7 +33,7 @@ from .model import (
 from .phase import phase_for
 from .predict import predict
 from .sanitize import redact, secret_values
-from .times import format_delay, human_form, local_dict, parse_now_maybe
+from .times import as_local, format_delay, human_form, local_dict, parse_now_maybe
 from .turn import default_min_turn
 
 
@@ -132,6 +133,7 @@ def parse_request(data: dict) -> CheckRequest:
         cadence=cadence,
         alert_delay_min=_as_int(data.get("alert_delay_min"), DEFAULT_ALERT_DELAY_MIN),
         previous_checkpoint=(str(data["previous_checkpoint"]) if data.get("previous_checkpoint") else None),
+        previous_phase=(str(data["previous_phase"]) if data.get("previous_phase") else None),
         attempts=_as_int(data.get("attempts"), 0),
         previous_gate=(str(data["previous_gate"]) if data.get("previous_gate") else None),
     )
@@ -171,8 +173,39 @@ def too_early_gate(day: dt.date, now: dt.datetime, origin: Optional[str]):
 
 
 def _visible_from(day: dt.date, tzname: str) -> dt.datetime:
-    """T−24h using origin-local midnight of the ticket date as T until STD is known."""
-    return _local_midnight(day, tzname) - dt.timedelta(hours=TOO_EARLY_HOURS)
+    """First allowed lookup until STD is known: origin-local noon of the previous day.
+
+    Using midnight of the ticket date as T made a wasted call at 00:00 local,
+    before T−24h of a morning departure. Noon of D−1 is after T−24h for
+    early flights and still before T−6h.
+    """
+    noon = _local_midnight(day, tzname) + dt.timedelta(hours=12)
+    return noon - dt.timedelta(hours=TOO_EARLY_HOURS)
+
+
+def _onward_visible(onward: OnwardRequest, now: dt.datetime, tzname: str) -> bool:
+    try:
+        day = parse_date(onward.date)
+    except Exception:
+        return True
+    tz = tz_for_iata(onward.origin) if onward.origin else tzname
+    start = _local_midnight(day, tz)
+    horizon = now.astimezone(start.tzinfo) + dt.timedelta(hours=WINDOW_END_MAX_AHEAD_H)
+    return start <= horizon
+
+
+def _should_fetch_onward(req: CheckRequest, flight: Flight, pred, now, tzname, checkpoint) -> bool:
+    if not req.onward or not flight.live:
+        return False
+    if not _onward_visible(req.onward, now, tzname):
+        return False
+    if checkpoint == "t_minus_3h":
+        return True
+    if flight.act_on or flight.act_in:
+        return True
+    if pred.band in ("watch", "at_risk"):
+        return True
+    return False
 
 
 def _skeleton(ident, date, origin, status="unknown", tzname="UTC") -> Flight:
@@ -208,26 +241,28 @@ def _connection_reason(explain: str) -> str:
     return parts[0].rstrip(".")
 
 
+def _impact_lead(conn=None, onward_ident: Optional[str] = None) -> str:
+    if not conn:
+        return ""
+    name = conn.onward_ident or onward_ident or "the onward flight"
+    if conn.band == "at_risk":
+        if conn.slack_min < 0:
+            gap = f"{format_delay(-conn.slack_min)} short"
+        else:
+            gap = f"{format_delay(conn.slack_min)} spare"
+        return f"Connection to {name} is at risk ({gap})."
+    if conn.band == "watch":
+        return f"Connection to {name} is worth watching."
+    return f"Connection to {name} is safe."
+
+
 def _with_connection(sentence: str, conn=None, onward_ident: Optional[str] = None) -> str:
     sentence = (sentence or "").rstrip()
     if sentence and not sentence.endswith("."):
         sentence += "."
-    if conn:
-        name = conn.onward_ident or onward_ident or "the onward flight"
-        if conn.band == "at_risk":
-            if conn.slack_min < 0:
-                gap = f"{format_delay(-conn.slack_min)} short"
-            else:
-                gap = f"{format_delay(conn.slack_min)} spare"
-            extra = f" The connection to {name} is at risk ({gap})"
-            reason = _connection_reason(conn.explain)
-            if reason:
-                extra += f" ({reason})"
-            sentence += extra + "."
-        else:
-            sentence += f" The connection to {name} is {_band_word(conn.band)}."
-    elif onward_ident:
-        sentence += f" The connection to {onward_ident} has not been scored yet."
+    lead = _impact_lead(conn, onward_ident)
+    if lead:
+        return f"{lead} {sentence}".strip()
     return sentence
 
 
@@ -242,8 +277,10 @@ def _gate_retime_notes(flight: Flight, previous_gate: Optional[str] = None) -> l
     if flight.est_out and flight.sched_out:
         shift = mins(flight.est_out - flight.sched_out)
         if abs(shift) >= 30:
-            when = human_form(flight.est_out, flight.origin, flight.origin_tz)
-            notes.append(f"retimed by {format_delay(shift)} to {when}")
+            a = as_local(flight.sched_out, flight.origin_tz)
+            b = as_local(flight.est_out, flight.origin_tz)
+            label = flight.origin or "local"
+            notes.append(f"moved from {a:%H:%M} to {b:%H:%M} ({label} time)")
     return notes
 
 
@@ -257,6 +294,7 @@ def _summarize(
     ticket_date: Optional[str] = None,
     phase: str = "scheduled",
     previous_gate: Optional[str] = None,
+    warning=None,
 ) -> str:
     name = _ident_route(flight)
     band_word = _band_word(pred.band)
@@ -288,6 +326,19 @@ def _summarize(
 
     notes = _gate_retime_notes(flight, previous_gate)
 
+    def _finish(msg: str) -> str:
+        msg = (msg or "").rstrip()
+        if msg and not msg.endswith("."):
+            msg += "."
+        for note in notes:
+            if note and note.lower() not in msg.lower():
+                cap = note[0].upper() + note[1:] if note else note
+                msg = msg.rstrip(".") + ". " + cap + "."
+        if warning and warning.get("code") == "budget_exceeded":
+            if "skipped" not in msg.lower():
+                msg = msg.rstrip(".") + ". Some live data was skipped to stay within budget."
+        return _with_connection(msg, conn, onward_ident)
+
     if phase == "at_arrival_gate" or flight.status == "landed":
         when = (
             human_form(flight.act_in or flight.act_on, flight.destination, flight.dest_tz)
@@ -302,41 +353,46 @@ def _summarize(
         if flight.baggage_claim:
             bits.append(f"baggage belt {flight.baggage_claim}")
         at = f" at {', '.join(bits)}" if bits else ""
-        return _with_connection(f"{name} landed {when}{at}.", conn, onward_ident)
+        return _finish(f"{name} landed {when}{at}.")
 
     if phase == "airborne" or (flight.act_off and not flight.act_on):
         land = pred.pred_in or flight.est_in
         extra = ""
         if land:
             extra = f", estimated arrival {human_form(land, flight.destination, flight.dest_tz)}"
-        return _with_connection(f"{name} is {band_word}, in the air{extra}.", conn, onward_ident)
+        return _finish(f"{name} is {band_word}, in the air{extra}.")
 
     if phase == "taxiing":
-        msg = f"{name} is {band_word}, taxiing"
-        if notes:
-            msg += "; " + "; ".join(notes)
-        return _with_connection(msg + ".", conn, onward_ident)
+        return _finish(f"{name} is {band_word}, taxiing.")
+
+    if phase == "at_gate_late":
+        delay = pred.dep_delay_min or 0
+        return _finish(
+            f"{name} is {band_word}, departure delayed {format_delay(delay)} past scheduled."
+        )
 
     if pred.band == "on_track":
         when = ""
         if pred.pred_out:
             when = f", departing {human_form(pred.pred_out, flight.origin, flight.origin_tz)}"
-        msg = f"{name} is on track{when}."
-        if notes:
-            msg = msg.rstrip(".") + "; " + "; ".join(notes) + "."
-        return _with_connection(msg, conn, onward_ident)
+        return _finish(f"{name} is on track{when}.")
 
     reason = (pred.reasons or [""])[0].rstrip(".")
+    skip_reason = False
     if reason:
+        low = reason.lower()
+        if any(n.lower() in low or low.startswith("airline now") or "moved from" in low for n in notes):
+            skip_reason = True
+        elif low.startswith("departure delayed") and pred.dep_delay_min:
+            skip_reason = True
+    if reason and not skip_reason:
         reason = reason[0].upper() + reason[1:]
     msg = f"{name} is {band_word}."
-    if reason:
+    if reason and not skip_reason:
         msg += f" {reason}."
     if pred.dep_delay_min:
         msg += f" Expected departure delay {format_delay(pred.dep_delay_min)}."
-    if notes:
-        msg += " " + "; ".join(notes).rstrip(".") + "."
-    return _with_connection(msg, conn, onward_ident)
+    return _finish(msg)
 
 
 def _pack_next(when: dt.datetime, now: dt.datetime, tzname: str, origin: str):
@@ -359,6 +415,7 @@ def _next_check(
     ticket_day: Optional[dt.date] = None,
     cadence: str = "essential",
     previous_checkpoint: Optional[str] = None,
+    previous_phase: Optional[str] = None,
     attempts: int = 0,
     retryable_error: bool = False,
 ):
@@ -369,7 +426,20 @@ def _next_check(
         return packed[0], packed[1], "t_minus_24h", 0
     if retryable_error:
         packed = _pack_next(now + RETRYABLE_RETRY, now, tzname, origin)
-        return packed[0], packed[1], previous_checkpoint or "t_minus_24h", attempts
+        cp = previous_checkpoint
+        if flight.sched_out:
+            probe = essential_plan(
+                now=now, std=flight.sched_out, sta=flight.sched_in,
+                expected_off=flight.est_out or flight.sched_out,
+                expected_arr=flight.est_in or flight.sched_in,
+                actual_off=flight.act_off, actual_on=flight.act_on,
+                actual_in=flight.act_in,
+                previous_checkpoint=previous_checkpoint,
+                previous_phase=previous_phase,
+                attempts=attempts,
+            )
+            cp = probe.checkpoint
+        return packed[0], packed[1], cp or "t_minus_24h", attempts
     if cadence == "dense":
         if pred.final or flight.status in ("diverted", "landed"):
             return None, None, "done", attempts
@@ -409,10 +479,12 @@ def _next_check(
         expected_off=expected_off,
         expected_arr=expected_arr,
         actual_off=flight.act_off,
-        actual_on=flight.act_on or flight.act_in,
+        actual_on=flight.act_on,
+        actual_in=flight.act_in,
         cancelled=flight.cancelled,
         diverted=flight.diverted,
         previous_checkpoint=previous_checkpoint,
+        previous_phase=previous_phase,
         attempts=attempts,
     )
     if plan.final or plan.next_at is None:
@@ -483,8 +555,9 @@ def check_flight(req: CheckRequest | dict, *, fetch=None, adapter=None, now=None
             )
         else:
             flight = None
-    except BudgetExceeded:
-        raise
+    except BudgetExceeded as exc:
+        error = error_dict("budget_exceeded", "The live-data budget is too small for a lookup.")
+        flight = None
     except AeroAPIError as exc:
         error = exc.to_dict()
         error["message"] = redact(exc, key, getattr(adapter, "key", None))
@@ -505,6 +578,7 @@ def check_flight(req: CheckRequest | dict, *, fetch=None, adapter=None, now=None
             )
 
     want_inbound = False
+    probe_checkpoint = None
     if flight.live and flight.sched_out:
         if req.cadence == "dense":
             want_inbound = True
@@ -516,12 +590,15 @@ def check_flight(req: CheckRequest | dict, *, fetch=None, adapter=None, now=None
                 expected_off=flight.est_out or flight.sched_out,
                 expected_arr=flight.est_in or flight.sched_in,
                 actual_off=flight.act_off,
-                actual_on=flight.act_on or flight.act_in,
+                actual_on=flight.act_on,
+                actual_in=flight.act_in,
                 cancelled=flight.cancelled,
                 diverted=flight.diverted,
                 previous_checkpoint=req.previous_checkpoint,
+                previous_phase=req.previous_phase,
                 attempts=req.attempts,
             )
+            probe_checkpoint = probe.checkpoint
             want_inbound = inbound_for_checkpoint(probe.checkpoint)
     if want_inbound and hasattr(adapter, "attach_inbound") and flight.live:
         try:
@@ -543,9 +620,12 @@ def check_flight(req: CheckRequest | dict, *, fetch=None, adapter=None, now=None
         prior=req.prior,
         alert_delay_min=req.alert_delay_min,
         confirm_cancel=confirm_cancel,
+        now=now,
     )
     conn = None
-    if req.onward and flight.live and not error:
+    if req.onward and flight.live and not error and _should_fetch_onward(
+        req, flight, pred, now, tzname, probe_checkpoint,
+    ):
         onward_date = req.onward.date or req.date
         onward_tz = tz_for_iata(req.onward.origin) if req.onward.origin else tzname
         try:
@@ -577,11 +657,11 @@ def check_flight(req: CheckRequest | dict, *, fetch=None, adapter=None, now=None
         ticket_day=day,
         cadence=req.cadence,
         previous_checkpoint=req.previous_checkpoint,
+        previous_phase=req.previous_phase,
         attempts=req.attempts,
         retryable_error=retryable_error,
     )
-    if pred.final:
-        checkpoint = "done"
+    pred.final = checkpoint == "done"
     phase = phase_for(flight, now)
     ok = error is None and flight.status not in ("unknown",)
     impact = conn.band if conn is not None else None
@@ -600,6 +680,7 @@ def check_flight(req: CheckRequest | dict, *, fetch=None, adapter=None, now=None
             ticket_date=req.date,
             phase=phase,
             previous_gate=req.previous_gate,
+            warning=warning,
         ),
         next_check_local=nxt,
         next_check_in_minutes=minutes,

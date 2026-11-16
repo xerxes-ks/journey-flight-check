@@ -69,7 +69,7 @@ def test_landed_summary_includes_terminal_gate_belt():
     f["actual_in"] = "2027-03-15T21:12:00Z"
     f["inbound_fa_flight_id"] = None
     r = run(make_fetch({"/flights/XX123": (200, body)}))
-    assert r.final
+    assert r.final is False
     assert "landed" in r.summary
     assert "terminal 2" in r.summary
     assert "gate B4" in r.summary

@@ -1,9 +1,21 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "functions": {
-    "api/check.py": {
+    "api/*.py": {
       "maxDuration": 30,
       "excludeFiles": "{tests,.github}/**"
     }
-  }
+  },
+  "crons": [
+    {
+      "path": "/api/tick",
+      "schedule": "*/5 * * * *"
+    }
+  ],
+  "rewrites": [
+    { "source": "/test", "destination": "/test/index.html" },
+    { "source": "/api/track/:id", "destination": "/api/untrack?id=:id" },
+    { "source": "/api/tracked/:id/events", "destination": "/api/events?id=:id" },
+    { "source": "/api/tracked/:id", "destination": "/api/tracked?id=:id" }
+  ]
 }

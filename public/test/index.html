@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>flightcheck /test</title>
+  <style>
+    :root { font-family: ui-sans-serif, system-ui, sans-serif; color: #111; background: #f6f6f4; }
+    body { max-width: 960px; margin: 24px auto; padding: 0 16px 48px; }
+    h1 { font-size: 1.4rem; margin: 0 0 8px; }
+    p.lead { color: #444; margin: 0 0 20px; }
+    section { background: #fff; border: 1px solid #ddd; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+    label { display: block; font-size: 0.8rem; margin: 8px 0 4px; color: #333; }
+    input, select, textarea { width: 100%; box-sizing: border-box; padding: 8px; font: inherit; }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    button { margin-top: 12px; margin-right: 8px; padding: 8px 14px; font: inherit; cursor: pointer; }
+    pre { background: #111; color: #e8e8e8; padding: 12px; overflow: auto; font-size: 12px; border-radius: 6px; }
+    .err { color: #a11; }
+    code { font-size: 0.9em; }
+  </style>
+</head>
+<body>
+  <h1>flightcheck test console</h1>
+  <p class="lead">Synthetic flights only. Token stays in this browser. Simulate is zero-cost; Track calls AeroAPI if a key is configured.</p>
+
+  <section>
+    <label>Bearer token (<code>FLIGHTCHECK_TOKEN</code>)</label>
+    <input id="token" type="password" autocomplete="off" />
+    <button type="button" id="saveToken">Save token</button>
+  </section>
+
+  <section>
+    <h2>Simulate (no AeroAPI)</h2>
+    <div class="row">
+      <div>
+        <label>Scenario</label>
+        <select id="scenario">
+          <option>on_time</option>
+          <option>inbound_late_recovers</option>
+          <option>big_delay</option>
+          <option>gate_change</option>
+          <option>cancelled_then_confirmed</option>
+          <option>cancelled_then_reinstated</option>
+          <option>diverted</option>
+          <option>retimed</option>
+          <option>upstream_outage</option>
+        </select>
+      </div>
+      <div>
+        <label>Flight / date / origin / STD local</label>
+        <input id="simIdent" value="XX123" />
+        <input id="simDate" value="2027-06-22" />
+        <input id="simOrigin" value="LHR" />
+        <input id="simStd" value="09:40" />
+      </div>
+    </div>
+    <button type="button" id="runSim">Replay checkpoints</button>
+    <p id="simMeta"></p>
+    <pre id="simOut">{}</pre>
+  </section>
+
+  <section>
+    <h2>Track</h2>
+    <div class="row">
+      <div>
+        <label>Flight</label><input id="trFlight" value="XX123" />
+        <label>Date</label><input id="trDate" value="2027-06-22" />
+        <label>Origin</label><input id="trOrigin" value="LHR" />
+      </div>
+      <div>
+        <label>Webhook URL</label><input id="trHook" value="" placeholder="https://…" />
+        <label>Opaque ref</label><input id="trRef" value="test" />
+        <label>Tracking id (untrack / events)</label><input id="trId" value="" />
+      </div>
+    </div>
+    <button type="button" id="doTrack">POST /api/track</button>
+    <button type="button" id="doList">GET /api/tracked</button>
+    <button type="button" id="doEvents">GET events</button>
+    <button type="button" id="doUntrack">Untrack</button>
+    <button type="button" id="doTick">POST /api/tick</button>
+    <pre id="trOut">{}</pre>
+  </section>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const tokenKey = "flightcheck_token";
+    $("token").value = localStorage.getItem(tokenKey) || "";
+    $("saveToken").onclick = () => {
+      localStorage.setItem(tokenKey, $("token").value.trim());
+    };
+    function headers() {
+      const t = $("token").value.trim();
+      return { "Authorization": "Bearer " + t, "Content-Type": "application/json" };
+    }
+    async function show(el, fn) {
+      try {
+        const data = await fn();
+        $(el).textContent = JSON.stringify(data, null, 2);
+        $(el).classList.remove("err");
+        return data;
+      } catch (e) {
+        $(el).textContent = String(e);
+        $(el).classList.add("err");
+      }
+    }
+    async function api(path, opts) {
+      const res = await fetch(path, opts);
+      const text = await res.text();
+      let body;
+      try { body = JSON.parse(text); } catch { body = { raw: text }; }
+      if (!res.ok) throw new Error(res.status + " " + JSON.stringify(body));
+      return body;
+    }
+    $("runSim").onclick = () => show("simOut", async () => {
+      const body = await api("/api/simulate", {
+        method: "POST",
+        headers: headers(),
+        body: JSON.stringify({
+          scenario: $("scenario").value,
+          flight: $("simIdent").value,
+          date: $("simDate").value,
+          origin: $("simOrigin").value,
+          std_local: $("simStd").value,
+        }),
+      });
+      $("simMeta").textContent = "calls_total=" + (body.calls_total || 0) + " steps=" + ((body.timeline || []).length);
+      return body;
+    });
+    $("doTrack").onclick = () => show("trOut", async () => {
+      const body = await api("/api/track", {
+        method: "POST",
+        headers: headers(),
+        body: JSON.stringify({
+          flight: $("trFlight").value,
+          date: $("trDate").value,
+          origin: $("trOrigin").value,
+          webhook_url: $("trHook").value,
+          ref: $("trRef").value,
+        }),
+      });
+      if (body.tracking_id) $("trId").value = body.tracking_id;
+      return body;
+    });
+    $("doList").onclick = () => show("trOut", () => api("/api/tracked", { headers: headers() }));
+    $("doEvents").onclick = () => show("trOut", () => api("/api/tracked/" + encodeURIComponent($("trId").value) + "/events", { headers: headers() }));
+    $("doUntrack").onclick = () => show("trOut", () => api("/api/untrack", {
+      method: "POST",
+      headers: headers(),
+      body: JSON.stringify({ tracking_id: $("trId").value }),
+    }));
+    $("doTick").onclick = () => show("trOut", () => api("/api/tick", { method: "POST", headers: headers(), body: "{}" }));
+  </script>
+</body>
+</html>

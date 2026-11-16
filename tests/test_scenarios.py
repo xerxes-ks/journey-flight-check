@@ -220,13 +220,29 @@ def test_landed_is_final():
     body = load_fx("xx123.json")
     f = body["flights"][0]
     f["actual_out"] = "2027-03-15T18:10:00Z"
+    f["actual_off"] = "2027-03-15T18:12:00Z"
+    f["actual_on"] = "2027-03-15T21:10:00Z"
     f["actual_in"] = "2027-03-15T21:12:00Z"
     f["inbound_fa_flight_id"] = None
     fetch = make_fetch({"/flights/XX123": (200, body)})
     r = run(fetch)
     assert r.flight.status == "landed"
-    assert r.prediction.final
-    assert r.next_check_local is None
-    assert r.next_check_in_minutes is None
+    assert r.prediction.final is False
+    assert r.next_check_in_minutes is not None
+    assert r.next_check_in_minutes >= 20
+    follow = check_flight(
+        {
+            "flight": "XX123",
+            "date": "2027-03-15",
+            "origin": "XXA",
+            "previous_checkpoint": r.checkpoint,
+            "previous_phase": r.phase,
+            "attempts": r.attempts,
+        },
+        fetch=fetch,
+        now=parse_time("2027-03-15T21:32:00Z"),
+    )
+    assert follow.prediction.final
+    assert follow.next_check_local is None
     assert r.prediction.dep_delay_min == 10
     assert r.prediction.arr_delay_min == 12

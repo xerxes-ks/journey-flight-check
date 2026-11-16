@@ -1,17 +1,17 @@
 # flightcheck
 
-A small, general-purpose, **stateless** flight-status tool. Given a flight number and the **origin-local date printed on the ticket**, it returns structured live status, a delay prediction, optional connection risk, a one-sentence `summary`, and `next_check_local` so a cron can self-schedule.
+A small, general-purpose flight-status tool. Given a flight number and the **origin-local date printed on the ticket**, it returns structured live status, a delay prediction, optional connection risk, a one-sentence `summary`, and `next_check_local`.
 
-v0.1 is a Python library, a CLI, and a Vercel Python Function. It does **not** schedule rechecks, send messages, or store trip manifests — those belong to callers. An MCP server wrapper is **out of scope** for v0.1 (future work).
+v0.1 is a Python library, a CLI, and Vercel Python Functions. **`POST /api/check` is still stateless.** The hosted service can also **own tracking**: it stores only ident / date / origin / policy / alerts / webhook / opaque `ref` / last snapshot / event log, follows the essential cadence, and fans out signed webhooks. Trip manifests (who is travelling, PNR, chat thread) stay with the caller. An MCP server wrapper is **out of scope** for v0.1.
 
 ## Local-time contract
 
 Tickets print local times. Callers (an LLM concierge or a cron) should **never convert to UTC**.
 
 - **Input `date`** is the departure date as printed on the ticket (the origin airport’s local calendar date). There is no timezone parameter. Optional `origin` (IATA) disambiguates duplicate flight numbers and is used to resolve timezone *before* the first AeroAPI call.
-- **Output times** are ISO-8601 strings **with the airport’s offset**, plus `tz` (IANA name) and a short `human` form such as `02:55 Sun 13 Dec (DEL time)`. Departures use the origin tz; arrivals use the destination tz. Reason strings use those local clocks, never UTC.
+- **Output times** are ISO-8601 strings **with the airport’s offset**, plus `tz` (IANA name) and a short `human` form such as `09:40 Tue 22 Jun (LHR time)`. Departures use the origin tz; arrivals use the destination tz. Reason strings use those local clocks, never UTC.
 - **`checked_at`** is the UTC time of this check (ISO with `Z`). Store it with the result to judge freshness.
-- **`next_check_local`** is in the origin’s local time; **`next_check_in_minutes`** / **`next_poll_min`** (same integer) is the wait from `now`. **Null only when the result is `final`**. `too_early` is not final: `next_check` is **T−24h**. Echo `checkpoint` and `attempts` on the next call so cancelled / takeoff / landing retries are counted.
+- **`next_check_local`** is in the origin’s local time; **`next_check_in_minutes`** / **`next_poll_min`** (same integer) is the wait from `now`. **Null only when the result is `final`**. `too_early` is not final: `next_check` is **T−24h**. Echo `checkpoint`, `previous_phase`, and `attempts` on the next call so cancelled / takeoff / landing retries and the on-block follow-up are counted. Never `final` while `phase` is `airborne`.
 - **`summary`** is a short paragraph a chat bot can relay as-is (human band words: on track / worth watching / at risk). Top-level `status`, `band`, and `final` duplicate the fields a cron or LLM is most likely to branch on.
 
 ### Timezones
@@ -25,7 +25,7 @@ The **too_early** path makes **no AeroAPI call**, so it cannot read those fields
 - **Resolved flight:** scheduled, estimated, and actual **gate** times (`actual_out` / `actual_in`) plus **runway** times (`actual_off` / `actual_on`); AeroAPI `status_text` and `progress_percent`; movement `phase` (`scheduled` / `at_gate_late` / `taxiing` / `airborne` / `landed` / `at_arrival_gate`). Never “in the air” while taxiing.
 - **Inbound aircraft:** ident and ETA only at the T−3h and T−1h checkpoints (essential cadence). Cancelled/diverted inbound raises the punctuality band to at least `watch`.
 - **Delay prediction:** expected departure and arrival delay in minutes, a band (`on_track` / `watch` / `at_risk` / `unknown`), and local-time reasons. Evidence order: airline estimate, then inbound ETA + min turn, then an optional historical prior. Default min turn is **35 min**, or **60 min** for wide-body/long-haul (`B77x`/`B78x`/`A33x`/`A35x`/`A38x`, or block time > 5h). Overridable via `min_turn`.
-- **Connection risk** (optional `onward`): default `min_connect_min` is **90 min** for a self-transfer (`separate_ticket` or `bags_recheck`), otherwise 45. `impact_band` follows connection risk. Punctuality `band` uses `alert_delay_min` (default 45). The summary mentions the connection when `onward` is given.
+- **Connection risk** (optional `onward`): default `min_connect_min` is **90 min** for a self-transfer (`separate_ticket` or `bags_recheck`), otherwise 45. `impact_band` follows connection risk. Punctuality `band` uses `alert_delay_min` (default 45). When a connection has been scored, the summary **leads with** safe / at risk, then the delay. Onward is not looked up outside AeroAPI’s ~47h window, and after that only at T−3h, landed, or when the punctuality band is at least `watch`.
 - **Calls and cost:** each AeroAPI request with an estimated USD cost.
 - **Errors:** structured `{code, message, retryable, http?, snippet?}`. `retryable` is **true** for `rate_limited`, `upstream_error`, and `timeout`; **false** for `bad_request`, `not_found`, `flight_not_found`, `budget_exceeded`, and `unauthorized`. Empty AeroAPI lists are **not** on_track: HTTP 200, `ok: false`, `status`/`band` `unknown`, `error.code: flight_not_found`. AeroAPI HTTP 404 is `not_found`. An 8s urlopen hang is `timeout`. The HTTP route never returns a bare 502.
 
@@ -34,9 +34,9 @@ The **too_early** path makes **no AeroAPI call**, so it cannot read those fields
 1. **Adapter** — FlightAware AeroAPI v4. Tests inject `fetch`; there is no network in CI. The fake fetch rejects windows the way AeroAPI does (`end` more than ~47h ahead → HTTP 400).
 2. **Prediction** — as above. Diverted / landed are `final`. Cancelled is confirmed after one 30-min recheck.
 3. **Connection scoring** — slack = (onward departure − bag-drop close if re-checking − required) − predicted arrival.
-4. **Surfaces** — library (`flightcheck.check_flight`), CLI, HTTP `GET`/`POST /api/check`.
+4. **Surfaces** — library (`flightcheck.check_flight`), CLI, HTTP `GET`/`POST /api/check`, plus tracking (`/api/track`, `/api/tick`, `/api/simulate`).
 
-If `now` is before **T−24h**, the adapter is **not** called: status `too_early`, `checkpoint` `t_minus_24h`, `next_check` at T−24h (T is origin-local midnight of the ticket date until `scheduled_out` is known, then checkpoints recompute from STD). Query `end` is still clamped to `now+47h`. If a later inbound/onward call would exceed the per-request budget, the flight already fetched is returned with a `warning` — it is not dropped.
+If `now` is before **T−24h**, the adapter is **not** called: status `too_early`, `checkpoint` `t_minus_24h`, `next_check` at T−24h. Until `scheduled_out` is known, T is origin-local **noon of the previous day** (so a midnight cron does not fire a wasted call before T−24h of a morning departure); after the first live lookup, checkpoints recompute from STD. T−3h / T−1h / T−30m re-anchor to the airline’s estimated departure. Query `end` is still clamped to `now+47h`. If a later inbound/onward call would exceed the per-request budget, the flight already fetched is returned with a `warning` and the summary says live data was skipped. A budget too small for one call returns a `budget_exceeded` error on the result (no exception).
 
 ```
 flight + ticket-local date [+ origin] [+ onward]
@@ -63,36 +63,40 @@ API only; this tool does not scrape FlightAware’s website. The key is read fro
 
 ## Cost model
 
-About **$0.005 per result set** (configurable via `cost_per_call`). This is an **estimate** — confirm against the [FlightAware AeroAPI usage page](https://www.flightaware.com/commercial/aeroapi/). Hard budget is **per request** (library default `$0.05`; HTTP `HTTP_BUDGET_CAP` `$0.50`). A **daily** cap is the **caller's** job; this tool does not enforce one.
+About **$0.005 per result set** (configurable via `cost_per_call`). This is an **estimate** — confirm against the [FlightAware AeroAPI usage page](https://www.flightaware.com/commercial/aeroapi/). Hard budget is **per request** (library default `$0.05`; HTTP `HTTP_BUDGET_CAP` `$0.50`). A **daily** cap for `/api/tick` is `FLIGHTCHECK_DAILY_BUDGET_USD` (default `$0.50`). Stateless `/api/check` does not enforce a daily cap.
 
 ## Recheck cadence
 
-Default is **`cadence=essential`**: about **7–9 AeroAPI result sets** per flight. Pass `cadence=dense` (or `poll_interval`) for the old 15-minute table.
+Default is **`cadence=essential`**: about **8–11 AeroAPI result sets** per flight. Pass `cadence=dense` (or `poll_interval`) for the old 15-minute table.
 
-| Checkpoint | When (origin-local STD) | Calls |
+| Checkpoint | When (origin-local) | Calls |
 |---|---|---|
-| `t_minus_24h` | T−24h | 1 (flight) |
-| `t_minus_6h` | T−6h | 1 |
-| `t_minus_3h` | T−3h | 2 (flight + inbound) |
-| `t_minus_1h` | T−1h | 2 |
-| `takeoff` | expected off + 30 min (STD+30 if on time). If not airborne, one retry 30 min later, then the landing check. | 1 |
-| `landing` | expected arrival + 10 min. If not landed, retry at the new ETA+10, max 2 retries, then `final`. | 1 |
-| `done` | landed, diverted, or cancelled after the 30-min confirm | 0 |
+| `t_minus_24h` | T−24h of STD | 1 (flight) |
+| `t_minus_6h` | T−6h of STD | 1 |
+| `t_minus_3h` | T−3h of expected off | 2 (flight + inbound) |
+| `t_minus_1h` | T−1h of expected off | 2 |
+| `t_minus_30m` | T−30m of expected off (flight only, so a late gate change posts before boarding) | 1 |
+| `takeoff` | expected off + 30 min. If still at the gate, recheck every 30 min (departure-delayed, minutes past STD). Never jump to landing while on the ground. | 1 |
+| `landing` | expected arrival + 10 min. If still airborne, retry at `max(new ETA+10, now+20 min)`, capped; **never `final` while airborne**. | 1 |
+| on-block follow-up | about +20 min after `actual_in` / `actual_on` (arrival gate + baggage belt), then `done` | 1 |
+| `done` | after the on-block follow-up, diverted, or cancelled after the 30-min confirm | 0 |
 
-Nothing before T−24h (`too_early`). A retime recomputes later checkpoints from the new STD / expected off. Cancelled **shows as cancelled** on first sight, rechecks once after 30 min, then `final`. Retryable upstream errors set `next_check` to 15 min and never put raw AeroAPI text in `summary`.
+Nothing before T−24h (`too_early`). An estimate-only retime re-anchors T−3h / T−1h / T−30m to the new estimated departure. A schedule change is phrased `moved from HH:MM to HH:MM (ORIGIN time)`. Cancelled **shows as cancelled** on first sight, keeps the current checkpoint, rechecks once after 30 min, then `final`. Retryable upstream errors set `next_check` to 15 min, keep the checkpoint, and never put raw AeroAPI text in `summary`. Timeouts use a plain sentence (`The live status request timed out.`).
 
-Example, synthetic **02:55** local departure (STD known):
+Example, synthetic **09:40** LHR departure on **22 Jun** (STD known):
 
 ```
-T-24h  02:55 previous local day   1 call
-T-6h   20:55 previous local day   1 call
-T-3h   23:55 previous local day   2 calls
-T-1h   01:55                      2 calls
-takeoff 03:25 (STD+30)            1 call  (+ optional +30 retry)
-landing expected arrival + 10     1 call  (+ up to 2 ETA+10 retries)
+T-24h  09:40 previous local day   1 call
+T-6h   03:40 same local day       1 call
+T-3h   06:40                      2 calls
+T-1h   08:40                      2 calls
+T-30m  09:10                      1 call
+takeoff 10:10 (STD+30)            1 call  (+ 30-min ground rechecks if still at the gate)
+landing expected arrival + 10     1 call  (+ 20-min airborne retries if needed)
++20 min after on-block            1 call  then done
 ```
 
-~7 calls if the flight runs on time; ~9 with both retries.
+~10 calls if the flight runs on time; a few more with ground or airborne holds.
 
 ## Install and CLI
 
@@ -103,8 +107,8 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
 .venv/bin/python -m pytest
 .venv/bin/python -m flightcheck check XX123 2026-12-10 --origin LAX --budget 0.05 --cadence essential --json
 .venv/bin/python -m flightcheck check XX123 2026-12-10 --onward YY456 --mct 60 --bag-recheck --separate-ticket
-.venv/bin/python -m flightcheck check XX754 2027-12-13 --origin DEL --now 2027-12-11T12:00:00Z --json
-.venv/bin/python -m flightcheck check XX754 2027-12-13 --origin DEL --now 2027-12-11T12:00:00Z --live --json
+.venv/bin/python -m flightcheck check XX123 2027-06-22 --origin LHR --now 2027-06-20T12:00:00Z --json
+.venv/bin/python -m flightcheck check XX123 2027-06-22 --origin LHR --now 2027-06-20T12:00:00Z --live --json
 ```
 
 `--now` is a simulation clock (local or ISO) and **stays offline** (dry run / fixtures) unless **`--live`** is passed explicitly. A dry run prints one line to stderr and costs $0. Without `FLIGHTAWARE_AEROAPI_KEY`, there is no live lookup.
@@ -211,6 +215,35 @@ curl -sS -H "Authorization: Bearer $FLIGHTCHECK_TOKEN" \
 
 Copy `.env.example` to `.env` for local experiments. `.env*` is gitignored.
 
+## Tracking
+
+The service owns the recheck loop. Callers `POST /api/track` with ident, ticket date, origin, `webhook_url`, and an opaque `ref`. Same ident/date/origin/webhook is idempotent.
+
+| Route | Auth | What |
+|---|---|---|
+| `POST /api/check` | `FLIGHTCHECK_TOKEN` | Stateless check (unchanged). |
+| `POST /api/track` | `FLIGHTCHECK_TOKEN` | Start tracking. |
+| `DELETE /api/track/{id}` or `POST /api/untrack` | `FLIGHTCHECK_TOKEN` | Stop tracking. |
+| `GET /api/tracked` | `FLIGHTCHECK_TOKEN` | List tracks. |
+| `GET /api/tracked/{id}/events` | `FLIGHTCHECK_TOKEN` | Event log. |
+| `GET`/`POST /api/tick` | `CRON_SECRET` (Vercel cron every 5 min) | Run due checkpoints. One AeroAPI lookup per ident/date/origin group. Stops when the daily budget is exhausted. |
+| `POST /api/simulate` | `FLIGHTCHECK_TOKEN` | Zero-cost essential-cadence replay against synthetic fixtures. |
+| `POST /api/webhook-sink` | HMAC `X-Flightcheck-Signature` | Capture outbound events for `/test`. |
+| `GET /test` | browser | Operator console (token in localStorage). |
+
+Outbound webhooks are HMAC-SHA256 of the raw body (`FLIGHTCHECK_WEBHOOK_SECRET`). Relay `summary` as-is; see `docs/EVENTS.md`.
+
+### Env
+
+| Variable | Used by |
+|---|---|
+| `FLIGHTAWARE_AEROAPI_KEY` | Live lookups |
+| `FLIGHTCHECK_TOKEN` | `/api/check`, `/api/track`, `/api/simulate`, `/test` |
+| `FLIGHTCHECK_WEBHOOK_SECRET` | `X-Flightcheck-Signature` |
+| `CRON_SECRET` | `/api/tick` |
+| `FLIGHTCHECK_DAILY_BUDGET_USD` | Tick spend cap (default 0.50) |
+| `KV_REST_API_URL` + `KV_REST_API_TOKEN` (or Upstash `UPSTASH_REDIS_REST_*`) | Track store |
+
 ## Layout
 
 | Path | What |
@@ -219,9 +252,12 @@ Copy `.env.example` to `.env` for local experiments. `.env*` is gitignored.
 | `flightcheck/airports.py` | Bundled IATA→tz map (too_early only) |
 | `flightcheck/predict.py` | Delay prediction |
 | `flightcheck/connections.py` | Connection-risk scoring |
-| `flightcheck/cadence.py` | `poll_interval` |
+| `flightcheck/cadence.py` | Essential checkpoints + `poll_interval` |
+| `flightcheck/track.py` | Subscribe, tick, daily budget, lookup cache |
 | `flightcheck/cli.py` | `python -m flightcheck` (`--now` offline unless `--live`) |
-| `api/check.py` | Vercel Function |
+| `api/check.py` | Stateless Vercel Function |
+| `api/track.py` / `api/tick.py` / `api/simulate.py` | Tracking + cron + replay |
+| `public/test/index.html` | `/test` console |
 | `schema/check_flight.tool.json` | Tiny tool input/output JSON Schema |
 
 ## Future work

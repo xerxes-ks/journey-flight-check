@@ -28,7 +28,7 @@
         "type": "string",
         "enum": ["essential", "dense"],
         "default": "essential",
-        "description": "essential (default, ~7–9 calls) or dense (legacy 15-min table)."
+        "description": "essential (default, ~8–11 calls) or dense (legacy 15-min table)."
       },
       "alert_delay_min": {
         "type": "integer",
@@ -39,6 +39,10 @@
       "previous_checkpoint": {
         "type": "string",
         "description": "Echo checkpoint from the last result so cancelled/takeoff/landing retries are counted."
+      },
+      "previous_phase": {
+        "type": "string",
+        "description": "Echo phase from the last result so the +20 min on-block follow-up is not confused with an airborne landing retry."
       },
       "attempts": {
         "type": "integer",
@@ -110,7 +114,7 @@
       },
       "checkpoint": {
         "type": "string",
-        "enum": ["t_minus_24h", "t_minus_6h", "t_minus_3h", "t_minus_1h", "takeoff", "landing", "done"]
+        "enum": ["t_minus_24h", "t_minus_6h", "t_minus_3h", "t_minus_1h", "t_minus_30m", "takeoff", "landing", "done"]
       },
       "attempts": { "type": "integer" },
       "final": { "type": "boolean" },
