@@ -20,20 +20,38 @@ def test_budget_exceeded_stops_before_second_call():
 def test_budget_exceeded_via_check_flight():
     with pytest.raises(BudgetExceeded):
         check_flight(
-            {"ident": "XX123", "date": "2027-03-15", "origin": "XXA", "budget": 0.005},
+            {"flight": "XX123", "date": "2027-03-15", "origin": "XXA", "budget": 0.005},
             fetch=scenario_fetch(),
             now=parse_time(NEAR_DEP),
         )
 
 
-def test_non_404_http_error_is_aeroapi_error():
-    fetch = make_fetch({"/flights/XX123": (500, {"title": "boom"})})
+def test_http_error_keeps_sanitized_snippet():
+    fetch = make_fetch({"/flights/XX123": (500, {"title": "boom", "detail": "engine fault"})})
     ad = AeroAPIAdapter("test-key", fetch=fetch, budget_usd=0.05)
     with pytest.raises(AeroAPIError) as exc:
         ad.lookup("XX123", "2027-03-15", now=parse_time(NEAR_DEP))
     assert exc.value.http_status == 500
+    assert exc.value.code == "upstream_error"
     assert "500" in str(exc.value)
-    assert "boom" not in str(exc.value)
+    assert "boom" in str(exc.value)
+
+
+def test_error_codes_mapped():
+    cases = [(400, "bad_request"), (404, "not_found"), (429, "rate_limited"), (503, "upstream_error")]
+    for status, code in cases:
+        fetch = make_fetch({"/flights/XX123": (status, {"title": f"http-{status}"})})
+        ad = AeroAPIAdapter("test-key", fetch=fetch, budget_usd=0.05)
+        with pytest.raises(AeroAPIError) as exc:
+            ad.lookup("XX123", "2027-03-15", now=parse_time(NEAR_DEP))
+        assert exc.value.code == code
+        r = check_flight(
+            {"flight": "XX123", "date": "2027-03-15"},
+            fetch=fetch,
+            now=parse_time(NEAR_DEP),
+        )
+        assert r.error["code"] == code
+        assert r.ok is False
 
 
 def test_cost_is_configurable():
@@ -51,3 +69,18 @@ def test_to_flight_maps_documented_fields():
     assert f.gate_destination == "B4"
     assert f.terminal_destination == "2"
     assert f.origin_tz == "America/New_York"
+
+
+def test_min_turn_override():
+    r = check_flight(
+        {
+            "flight": "XX123",
+            "date": "2027-03-15",
+            "origin": "XXA",
+            "min_turn": 10,
+        },
+        fetch=scenario_fetch(inbound="xx122-late.json"),
+        now=parse_time(NEAR_DEP),
+    )
+    # inbound 18:20Z + 10 min = 18:30Z vs 18:00Z → +30
+    assert r.prediction.dep_delay_min == 30

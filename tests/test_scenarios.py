@@ -1,4 +1,4 @@
-"""Generic scenario coverage: on time, inbound late, missed MCT, cancelled, diverted, schedule-only."""
+"""Generic scenario coverage: on time, inbound late, missed MCT, cancelled, diverted, unknown."""
 
 from flightcheck import check_flight
 from flightcheck.model import parse_time
@@ -7,7 +7,7 @@ from tests.conftest import NEAR_DEP, FAR_DEP, scenario_fetch, load_fx, make_fetc
 
 def run(fetch, **extra):
     payload = {
-        "ident": "XX123",
+        "flight": "XX123",
         "date": "2027-03-15",
         "origin": "XXA",
         "budget": 0.05,
@@ -29,39 +29,48 @@ def test_on_time():
     assert r.inbound.ident == "XX122"
     assert r.prediction.band == "on_track"
     assert r.prediction.dep_delay_min == 0
-    assert not r.prediction.schedule_only
+    assert r.ok
     d = r.flight.to_dict()
-    assert d["scheduled_out"]["timezone"] == "America/New_York"
-    assert d["scheduled_out"]["local"].startswith("2027-03-15T14:00:00")
-    assert d["scheduled_in"]["timezone"] == "America/Chicago"
+    so = d["scheduled_out"]
+    assert so["tz"] == "America/New_York"
+    assert so["local"].startswith("2027-03-15T14:00:00")
+    assert "Z" not in so["local"]
+    assert "XXA time" in so["human"]
+    assert d["scheduled_in"]["tz"] == "America/Chicago"
+    assert "UTC" not in r.prediction.reasons[0] if r.prediction.reasons else True
+    assert r.summary
+    assert r.next_check_local is not None
+    assert r.next_check_in_minutes == 15  # T-90 min → 15-min cadence
 
 
 def test_on_time_connection_protected():
     r = run(scenario_fetch(), onward={
-        "ident": "YY456",
-        "min_connection_min": 45,
+        "flight": "YY456",
+        "date": "2027-03-15",
+        "min_connect_min": 45,
         "separate_ticket": False,
     })
     assert r.connection.band == "on_track"
     assert r.connection.protected
-    assert r.connection.slack_min == 45  # 22:30 - 45 MCT - 21:00 pred
+    assert r.connection.slack_min == 45
     assert r.connection.required_min == 45
     assert "Separate tickets" not in r.connection.explain
 
 
 def test_inbound_late_predicts_from_inbound():
     r = run(scenario_fetch(inbound="xx122-late.json"))
-    # inbound gate 18:20Z + 30 min turn = 18:50Z vs STD 18:00Z → +50
-    assert r.prediction.dep_delay_min == 50
-    assert r.prediction.arr_delay_min == 50
+    # inbound gate 18:20Z + 35 min default turn = 18:55Z vs STD 18:00Z → +55
+    assert r.prediction.dep_delay_min == 55
+    assert r.prediction.arr_delay_min == 55
     assert r.prediction.band == "at_risk"
     assert "XX122" in r.prediction.reasons[0]
+    assert "18:20" in r.prediction.reasons[0] or "14:20" in r.prediction.reasons[0]
     assert r.inbound.ident == "XX122"
+    assert "Z" not in r.prediction.reasons[0]
 
 
 def test_airline_estimate_used_when_larger_than_inbound():
     r = run(scenario_fetch(flight="xx123-airline-delay.json", inbound="xx122.json"))
-    # inbound on time (17:00+30=17:30 vs 18:00 → 0); airline +20
     assert r.prediction.dep_delay_min == 20
     assert "airline now shows departure" in r.prediction.reasons[0]
 
@@ -76,11 +85,12 @@ def test_missed_mct_separate_ticket():
     r = run(
         scenario_fetch(inbound="xx122-late.json"),
         onward={
-            "ident": "YY456",
-            "min_connection_min": 60,
+            "flight": "YY456",
+            "date": "2027-03-15",
+            "min_connect_min": 60,
             "terminal_change": True,
             "terminal_change_min": 20,
-            "bag_recheck": True,
+            "bags_recheck": True,
             "checkin_close_min": 45,
             "separate_ticket": True,
         },
@@ -88,53 +98,61 @@ def test_missed_mct_separate_ticket():
     c = r.connection
     assert c.band == "at_risk"
     assert not c.protected
-    assert c.required_min == 80  # 60 MCT + 20 terminal change
-    # latest = 22:30 - (45 close + 80 required) = 20:25; pred in = 21:50; slack = -85
+    assert c.required_min == 80
     assert c.slack_min < 0
     assert "Separate tickets" in c.explain
 
 
-def test_cancelled():
+def test_cancelled_is_final():
     r = run(scenario_fetch(flight="xx123-cancelled.json"))
     assert r.flight.cancelled and r.flight.status == "cancelled"
     assert r.prediction.band == "at_risk"
+    assert r.prediction.final is True
+    assert r.next_check_local is None
+    assert r.next_check_in_minutes is None
     assert r.prediction.reasons[0].startswith("cancelled")
     r2 = run(
         scenario_fetch(flight="xx123-cancelled.json"),
-        onward={"ident": "YY456", "min_connection_min": 45},
+        onward={"flight": "YY456", "date": "2027-03-15", "min_connect_min": 45},
     )
     assert r2.connection.band == "at_risk"
     assert "cancelled" in r2.connection.explain
 
 
-def test_diverted():
+def test_diverted_is_final():
     r = run(scenario_fetch(flight="xx123-diverted.json"))
     assert r.flight.diverted and r.flight.status == "diverted"
     assert r.flight.divert_to == "XXC"
     assert r.prediction.band == "at_risk"
+    assert r.prediction.final is True
+    assert r.next_check_local is None
     assert "diverted to XXC" in r.prediction.reasons[0]
 
 
-def test_schedule_only_when_no_live_data():
+def test_empty_response_is_unknown_not_on_track():
     fetch = make_fetch({"/flights/": (200, load_fx("empty.json"))})
     r = run(fetch)
-    assert r.flight.source == "schedule" and not r.flight.live
-    assert r.prediction.schedule_only
-    assert "timetable only" in r.prediction.reasons[0]
-    assert r.prediction.band == "on_track"
+    assert r.flight.status == "unknown"
+    assert r.prediction.band == "unknown"
+    assert r.ok is False
+    assert r.error and r.error["code"] == "no_data"
     assert r.inbound is None
 
 
-def test_schedule_only_on_404():
-    fetch = make_fetch({"/flights/XX123": (404, {"title": "not found"})})
+def test_404_is_not_found():
+    fetch = make_fetch({"/flights/XX123": (404, {"title": "not found", "detail": "no such flight"})})
     r = run(fetch)
-    assert r.prediction.schedule_only
-    assert r.flight.source == "schedule"
+    assert r.flight.status == "unknown"
+    assert r.prediction.band == "unknown"
+    assert r.ok is False
+    assert r.error["code"] == "not_found"
+    assert r.error["http"] == 404
+    assert "not found" in (r.error.get("snippet") or r.error["message"]).lower()
 
 
 def test_no_inbound_lookup_far_from_departure():
     r = check_flight(
-        {"ident": "XX123", "date": "2027-03-15", "origin": "XXA"},
+        {"flight": "XX123", "date": "2027-03-15", "origin": "XXA"},
         fetch=scenario_fetch(),
         now=parse_time(FAR_DEP),
     )
@@ -188,5 +206,7 @@ def test_landed_is_final():
     r = run(fetch)
     assert r.flight.status == "landed"
     assert r.prediction.final
+    assert r.next_check_local is None
+    assert r.next_check_in_minutes is None
     assert r.prediction.dep_delay_min == 10
     assert r.prediction.arr_delay_min == 12

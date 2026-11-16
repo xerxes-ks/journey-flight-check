@@ -56,3 +56,12 @@ def test_positional_signature():
     dep = dt.datetime(2027, 3, 15, 18, 0, tzinfo=UTC)
     now = dep - dt.timedelta(hours=1)
     assert poll_interval(dep, now, False) == 15
+
+
+def test_airborne_keys_off_actual_departure():
+    dep = dt.datetime(2027, 3, 15, 18, 0, tzinfo=UTC)
+    now = dep - dt.timedelta(minutes=30)  # still before STD
+    actual = now - dt.timedelta(minutes=10)  # already pushed back
+    arr = dep + dt.timedelta(hours=3)
+    assert poll_interval(dep, now, False, arr) == 15
+    assert poll_interval(dep, now, False, arr, actual_dep=actual) == 30

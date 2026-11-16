@@ -5,8 +5,8 @@ Calls:
   GET /flights/{fa_flight_id}  (inbound aircraft, only inside the inbound window)
 
 Every call is logged with an estimated cost. A hard budget stops the next call
-when it would exceed the cap. Upstream error bodies are discarded so a key
-echoed by the provider cannot appear in responses or logs.
+when it would exceed the cap. Upstream error bodies are kept as a short
+sanitized snippet (never the API key).
 """
 
 from __future__ import annotations
@@ -18,15 +18,17 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 from ..exceptions import AeroAPIError, BudgetExceeded
 from ..model import (
     DEFAULT_COST_PER_CALL,
     DEFAULT_INBOUND_WINDOW_H,
     UTC,
+    WINDOW_END_MAX_AHEAD_H,
+    WINDOW_START_MAX_PAST_DAYS,
     Flight,
     Inbound,
-    Instant,
     normalize_ident,
     parse_date,
     parse_time,
@@ -35,6 +37,46 @@ from ..sanitize import redact
 from .schedule import ScheduleAdapter
 
 BASE = "https://aeroapi.flightaware.com/aeroapi"
+SNIPPET_LEN = 240
+
+
+def date_window(
+    day: dt.date,
+    now: dt.datetime,
+    origin_tz: str = "UTC",
+) -> tuple[dt.datetime, dt.datetime]:
+    """Inclusive start / exclusive end, clamped to AeroAPI's ~2-day-ahead limit."""
+    now = now.astimezone(UTC)
+    try:
+        tz = ZoneInfo(origin_tz) if origin_tz else UTC
+        local_start = dt.datetime.combine(day, dt.time.min, tzinfo=tz)
+    except Exception:
+        local_start = dt.datetime.combine(day, dt.time.min, tzinfo=UTC)
+    local_end = local_start + dt.timedelta(days=1)
+    start = local_start.astimezone(UTC) - dt.timedelta(hours=2)
+    end = local_end.astimezone(UTC) + dt.timedelta(hours=2)
+    max_end = now + dt.timedelta(hours=WINDOW_END_MAX_AHEAD_H)
+    min_start = now - dt.timedelta(days=WINDOW_START_MAX_PAST_DAYS)
+    if end > max_end:
+        end = max_end
+    if start < min_start:
+        start = min_start
+    if end <= start:
+        end = start + dt.timedelta(minutes=1)
+    return start, end
+
+
+def _body_snippet(body, key=None) -> str:
+    if not body:
+        return ""
+    if isinstance(body, dict):
+        text = json.dumps(body, ensure_ascii=False)
+    else:
+        text = str(body)
+    text = text.replace("\n", " ").strip()
+    if len(text) > SNIPPET_LEN:
+        text = text[: SNIPPET_LEN - 1] + "…"
+    return redact(text, key)
 
 
 class AeroAPIAdapter:
@@ -71,11 +113,18 @@ class AeroAPIAdapter:
             with urllib.request.urlopen(req, timeout=20) as resp:
                 return resp.status, json.loads(resp.read().decode())
         except urllib.error.HTTPError as exc:
+            raw = b""
             try:
-                exc.read()  # drain; body is discarded and never returned
+                raw = exc.read()
             except Exception:
-                pass
-            return exc.code, {}
+                raw = b""
+            body = {}
+            if raw:
+                try:
+                    body = json.loads(raw.decode())
+                except Exception:
+                    body = {"detail": raw.decode("utf-8", "replace")[:SNIPPET_LEN]}
+            return exc.code, body
         except Exception:
             return 0, {}
 
@@ -89,7 +138,6 @@ class AeroAPIAdapter:
         except (BudgetExceeded, AeroAPIError):
             raise
         except Exception:
-            # Never surface fetch/HTTP exception text (it may contain the key).
             status, body = 0, {}
         self.calls.append({
             "path": redact(path, self.key),
@@ -99,7 +147,7 @@ class AeroAPIAdapter:
             "ms": int((time.time() - t0) * 1000),
         })
         if status != 200:
-            raise AeroAPIError(int(status or 0))
+            raise AeroAPIError(int(status or 0), _body_snippet(body, self.key))
         if not isinstance(body, dict):
             return {}
         return body
@@ -108,13 +156,11 @@ class AeroAPIAdapter:
     def _iso(t: dt.datetime) -> str:
         return t.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    @staticmethod
-    def date_window(day: dt.date) -> tuple[dt.datetime, dt.datetime]:
-        start = dt.datetime.combine(day, dt.time.min, tzinfo=UTC) - dt.timedelta(hours=14)
-        end = dt.datetime.combine(day, dt.time.min, tzinfo=UTC) + dt.timedelta(hours=38)
-        return start, end
-
     def pick_instance(self, flights, day: dt.date, origin: Optional[str] = None):
+        """Match the origin-local calendar date of scheduled_out only.
+
+        UTC date is used only when the origin timezone is unknown.
+        """
         flights = [f for f in flights if isinstance(f, dict)]
         if origin:
             origin = origin.upper()
@@ -133,36 +179,37 @@ class AeroAPIAdapter:
             if t is None:
                 continue
             tzname = (f.get("origin") or {}).get("timezone")
-            local = Instant.from_dt(t, tzname)
-            local_day = dt.date.fromisoformat(local.local[:10]) if local else t.date()
-            if local_day == day or t.astimezone(UTC).date() == day:
-                dated.append(f)
-        cands = dated or [f for f in flights if sched(f)]
-        if not cands:
+            if tzname:
+                try:
+                    local_day = t.astimezone(ZoneInfo(tzname)).date()
+                except Exception:
+                    local_day = t.astimezone(UTC).date()
+                if local_day == day:
+                    dated.append(f)
+            else:
+                if t.astimezone(UTC).date() == day:
+                    dated.append(f)
+        if not dated:
             return None
         noon = dt.datetime.combine(day, dt.time(12, 0), tzinfo=UTC)
-        return min(cands, key=lambda f: abs((sched(f) - noon).total_seconds()))
+        return min(dated, key=lambda f: abs((sched(f) - noon).total_seconds()))
 
-    def lookup(self, ident, date, *, origin=None, now=None, fetch_inbound=True, min_turn=30):
+    def lookup(self, ident, date, *, origin=None, now=None, fetch_inbound=True, min_turn=None,
+               origin_tz: str = "UTC"):
         ident = normalize_ident(ident)
         day = parse_date(date)
         origin = (origin or "").upper() or None
         now = now or dt.datetime.now(UTC)
-        start, end = self.date_window(day)
+        start, end = date_window(day, now, origin_tz=origin_tz)
         params = {
             "start": self._iso(start),
             "end": self._iso(end),
             "ident_type": "designator",
         }
-        try:
-            body = self.call(f"/flights/{urllib.parse.quote(ident)}", params)
-        except AeroAPIError as exc:
-            if exc.http_status in (0, 404):
-                return self.fallback.lookup(ident, date, origin=origin, now=now)
-            raise
+        body = self.call(f"/flights/{urllib.parse.quote(ident)}", params)
         raw = self.pick_instance(body.get("flights") or [], day, origin)
         if not raw:
-            return self.fallback.lookup(ident, date, origin=origin, now=now)
+            return None
         flight = self.to_flight(raw)
         if (
             fetch_inbound
@@ -183,7 +230,9 @@ class AeroAPIAdapter:
             fl = ibody.get("flights") or []
             if fl:
                 inbound = fl[0]
-                dest_tz = ((inbound.get("destination") or {}).get("timezone")) or flight.origin_tz
+                dest = inbound.get("destination") or {}
+                dest_tz = dest.get("timezone") or flight.origin_tz
+                dest_iata = dest.get("code_iata") or flight.origin
                 flight.inbound = Inbound(
                     ident=inbound.get("ident_iata") or inbound.get("ident") or "",
                     est_arr=parse_time(
@@ -192,7 +241,8 @@ class AeroAPIAdapter:
                         or inbound.get("scheduled_in")
                     ),
                     status=inbound.get("status") or "",
-                    origin_tz=dest_tz,
+                    dest_tz=dest_tz,
+                    dest_iata=dest_iata,
                 )
         return flight
 

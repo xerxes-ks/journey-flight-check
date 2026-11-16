@@ -1,12 +1,6 @@
 """Connection-risk scoring between a resolved inbound flight and an onward flight.
 
-required time = MCT + terminal-change minutes (if flagged)
-deadline      = onward departure (counting a later airline estimate only when published)
-                minus bag-drop close when bags must be re-checked
-slack         = (deadline - required) - predicted arrival
-band          = at_risk if the inbound is cancelled/diverted or slack < 0
-                watch   if slack < margin (30 min self-transfer / 15 min protected)
-Separate tickets are unprotected: the onward airline owes nothing if the connection is missed.
+Human explanations use airport-local times, never UTC.
 """
 
 from __future__ import annotations
@@ -14,7 +8,7 @@ from __future__ import annotations
 import datetime as dt
 
 from .model import ConnectionRisk, Flight, OnwardRequest, Prediction, mins
-from .predict import hhmm
+from .times import clock
 
 
 def assess(
@@ -27,6 +21,8 @@ def assess(
     required = spec.min_connection_min + (spec.terminal_change_min if spec.terminal_change else 0)
     close = spec.checkin_close_min if spec.bag_recheck else 0
     onward_name = onward.ident_iata or onward.ident
+    arr_tz, arr_iata = inbound.dest_tz, inbound.destination
+    dep_tz, dep_iata = onward.origin_tz, onward.origin
 
     first = (pred.reasons or [""])[0]
     broken = first.startswith("cancelled") or first.startswith("diverted") or inbound.cancelled or inbound.diverted
@@ -65,8 +61,7 @@ def assess(
     else:
         band = "on_track"
 
-    tz = inbound.dest_tz
-    parts = [f"{onward_name} leaves {hhmm(next_dep) if next_dep else 'unknown'}"]
+    parts = [f"{onward_name} leaves {clock(next_dep, dep_tz, dep_iata)}"]
     if later:
         parts.append(f" (airline shows +{later} min)")
     parts.append(f"; you need about {required} min")
@@ -84,8 +79,8 @@ def assess(
     if latest and pred.pred_in:
         spare = f"{'+' if slack >= 0 else ''}{slack} min spare"
         explain = (
-            f"{why}. Latest workable arrival {hhmm(latest)}; "
-            f"predicted {hhmm(pred.pred_in)} ({spare})."
+            f"{why}. Latest workable arrival {clock(latest, arr_tz, arr_iata)}; "
+            f"predicted {clock(pred.pred_in, arr_tz, arr_iata)} ({spare})."
         )
     else:
         explain = f"{why}. Not enough schedule data to compute slack."

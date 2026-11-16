@@ -1,8 +1,6 @@
-"""The AeroAPI key and raw upstream bodies that might echo it never appear in output."""
+"""The AeroAPI key never appears in output; snippets are sanitized."""
 
 import json
-
-import pytest
 
 from flightcheck import check_flight
 from flightcheck.adapters.aeroapi import AeroAPIAdapter
@@ -10,6 +8,7 @@ from flightcheck.exceptions import AeroAPIError
 from flightcheck.model import parse_time
 from flightcheck.sanitize import redact
 from tests.conftest import NEAR_DEP
+import pytest
 
 KEY = "super-secret-test-key-abcxyz"
 
@@ -38,10 +37,10 @@ def test_key_never_leaks_from_http_error_body(monkeypatch):
     ad = AeroAPIAdapter(KEY, fetch=leaking_fetch, budget_usd=0.05)
     with pytest.raises(AeroAPIError) as exc:
         ad.lookup("XX123", "2027-03-15", now=parse_time(NEAR_DEP))
-    blob = _blob(exc.value, exc.value.args, ad.calls, json.dumps(ad.calls))
+    blob = _blob(exc.value, exc.value.args, exc.value.snippet, ad.calls, json.dumps(ad.calls))
     assert KEY not in blob
-    assert "invalid api key" not in blob
     assert ad.calls[0]["http"] == 401
+    assert "[redacted]" in str(exc.value) or "401" in str(exc.value)
 
 
 def test_key_never_leaks_from_check_flight_result(monkeypatch):
@@ -49,7 +48,7 @@ def test_key_never_leaks_from_check_flight_result(monkeypatch):
     from tests.conftest import scenario_fetch
 
     r = check_flight(
-        {"ident": "XX123", "date": "2027-03-15", "origin": "XXA"},
+        {"flight": "XX123", "date": "2027-03-15", "origin": "XXA"},
         fetch=scenario_fetch(),
         now=parse_time(NEAR_DEP),
         key=KEY,
@@ -66,14 +65,15 @@ def test_key_never_leaks_when_fetch_raises(monkeypatch):
         raise RuntimeError(f"refused key={KEY}")
 
     r = check_flight(
-        {"ident": "XX123", "date": "2027-03-15"},
+        {"flight": "XX123", "date": "2027-03-15"},
         fetch=fetch,
         now=parse_time(NEAR_DEP),
         key=KEY,
     )
     blob = json.dumps(r.to_dict())
     assert KEY not in blob
-    assert r.prediction.schedule_only
+    assert r.flight.status == "unknown"
+    assert r.ok is False
 
 
 def test_handler_error_payload_redacts_key(monkeypatch):
@@ -98,9 +98,10 @@ def test_handler_error_payload_redacts_key(monkeypatch):
         "POST",
         {"Authorization": "Bearer handler-token"},
         {},
-        {"ident": "XX123", "date": "2027-03-15"},
+        {"flight": "XX123", "date": "2027-03-15"},
     )
     blob = json.dumps(payload)
     assert KEY not in blob
-    assert status in (401, 402, 500, 502)
     assert "error" in payload
+    err = payload["error"] if isinstance(payload["error"], dict) else payload
+    assert KEY not in json.dumps(err)

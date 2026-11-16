@@ -5,21 +5,29 @@ from __future__ import annotations
 import datetime as dt
 from dataclasses import asdict, dataclass, field
 from typing import Any, Optional
-from zoneinfo import ZoneInfo
 
-UTC = dt.timezone.utc
-BANDS = ["on_track", "watch", "at_risk"]
-STATUSES = ("scheduled", "active", "landed", "cancelled", "diverted", "unknown")
+from .times import UTC, local_dict
+
+BANDS = ["on_track", "watch", "at_risk", "unknown"]
+STATUSES = (
+    "scheduled",
+    "active",
+    "landed",
+    "cancelled",
+    "diverted",
+    "unknown",
+    "too_early",
+)
 
 DEFAULT_BUDGET_USD = 0.05
-DEFAULT_MIN_TURN = 30
 DEFAULT_INBOUND_WINDOW_H = 6
 DEFAULT_MCT = 45
 DEFAULT_TERMINAL_CHANGE_MIN = 20
 DEFAULT_CHECKIN_CLOSE_MIN = 45
-# Personal-tier list price per result set for the endpoints used. Estimate only;
-# confirm on https://www.flightaware.com/commercial/aeroapi/ before relying on it.
 DEFAULT_COST_PER_CALL = 0.005
+TOO_EARLY_HOURS = 48
+WINDOW_END_MAX_AHEAD_H = 47
+WINDOW_START_MAX_PAST_DAYS = 10
 
 
 def worst(*bands: str) -> str:
@@ -53,33 +61,6 @@ def normalize_ident(ident: str) -> str:
 
 
 @dataclass
-class Instant:
-    utc: str
-    local: str
-    timezone: str
-
-    @classmethod
-    def from_dt(cls, t: Optional[dt.datetime], tzname: Optional[str]) -> Optional["Instant"]:
-        if t is None:
-            return None
-        t = t.astimezone(UTC)
-        tz = tzname or "UTC"
-        try:
-            local = t.astimezone(ZoneInfo(tz))
-        except Exception:
-            tz = "UTC"
-            local = t
-        return cls(
-            utc=t.strftime("%Y-%m-%dT%H:%M:%SZ"),
-            local=local.isoformat(timespec="seconds"),
-            timezone=tz,
-        )
-
-    def to_dict(self) -> dict:
-        return {"utc": self.utc, "local": self.local, "timezone": self.timezone}
-
-
-@dataclass
 class Prior:
     dep_median: int = 0
     arr_median: int = 0
@@ -107,10 +88,11 @@ class CheckRequest:
     origin: Optional[str] = None
     onward: Optional[OnwardRequest] = None
     budget_usd: float = DEFAULT_BUDGET_USD
-    min_turn: int = DEFAULT_MIN_TURN
+    min_turn: Optional[int] = None
     inbound_window_h: float = DEFAULT_INBOUND_WINDOW_H
     prior: Optional[Prior] = None
     cost_per_call: float = DEFAULT_COST_PER_CALL
+    now: Optional[dt.datetime] = None
 
 
 @dataclass
@@ -118,13 +100,13 @@ class Inbound:
     ident: str
     est_arr: Optional[dt.datetime] = None
     status: str = ""
-    origin_tz: str = "UTC"
+    dest_tz: str = "UTC"
+    dest_iata: str = ""
 
     def to_dict(self) -> dict:
-        inst = Instant.from_dt(self.est_arr, self.origin_tz)
         return {
             "ident": self.ident,
-            "est_arr": inst.to_dict() if inst else None,
+            "est_arr": local_dict(self.est_arr, self.dest_tz, self.dest_iata),
             "status": self.status,
         }
 
@@ -156,15 +138,12 @@ class Flight:
     cancelled: bool = False
     diverted: bool = False
     divert_to: str = ""
-    source: str = "schedule"
+    source: str = "none"
     live: bool = False
     inbound: Optional[Inbound] = None
 
     def to_dict(self) -> dict:
-        def t(value, tz):
-            inst = Instant.from_dt(value, tz)
-            return inst.to_dict() if inst else None
-
+        o, d = self.origin, self.destination
         return {
             "ident": self.ident,
             "ident_iata": self.ident_iata,
@@ -172,12 +151,12 @@ class Flight:
             "fa_flight_id": self.fa_flight_id,
             "origin": self.origin,
             "destination": self.destination,
-            "scheduled_out": t(self.sched_out, self.origin_tz),
-            "estimated_out": t(self.est_out, self.origin_tz),
-            "actual_out": t(self.act_out, self.origin_tz),
-            "scheduled_in": t(self.sched_in, self.dest_tz),
-            "estimated_in": t(self.est_in, self.dest_tz),
-            "actual_in": t(self.act_in, self.dest_tz),
+            "scheduled_out": local_dict(self.sched_out, self.origin_tz, o),
+            "estimated_out": local_dict(self.est_out, self.origin_tz, o),
+            "actual_out": local_dict(self.act_out, self.origin_tz, o),
+            "scheduled_in": local_dict(self.sched_in, self.dest_tz, d),
+            "estimated_in": local_dict(self.est_in, self.dest_tz, d),
+            "actual_in": local_dict(self.act_in, self.dest_tz, d),
             "gate_origin": self.gate_origin,
             "gate_destination": self.gate_destination,
             "terminal_origin": self.terminal_origin,
@@ -207,15 +186,15 @@ class Prediction:
     airline_dep_delay: Optional[int] = None
     origin_tz: str = "UTC"
     dest_tz: str = "UTC"
+    origin: str = ""
+    destination: str = ""
 
     def to_dict(self) -> dict:
-        out = Instant.from_dt(self.pred_out, self.origin_tz)
-        inn = Instant.from_dt(self.pred_in, self.dest_tz)
         return {
             "dep_delay_min": self.dep_delay_min,
             "arr_delay_min": self.arr_delay_min,
-            "expected_out": out.to_dict() if out else None,
-            "expected_in": inn.to_dict() if inn else None,
+            "expected_out": local_dict(self.pred_out, self.origin_tz, self.origin),
+            "expected_in": local_dict(self.pred_in, self.dest_tz, self.destination),
             "band": self.band,
             "reasons": list(self.reasons),
             "final": self.final,
@@ -263,13 +242,23 @@ class CheckResult:
     connection: Optional[ConnectionRisk]
     calls: list = field(default_factory=list)
     cost_usd_est: float = 0.0
+    ok: bool = True
+    summary: str = ""
+    next_check_local: Optional[dict] = None
+    next_check_in_minutes: Optional[int] = None
+    error: Optional[dict] = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
+            "ok": self.ok,
+            "summary": self.summary,
             "flight": self.flight.to_dict(),
             "inbound": self.inbound.to_dict() if self.inbound else None,
             "prediction": self.prediction.to_dict(),
             "connection": self.connection.to_dict() if self.connection else None,
+            "next_check_local": self.next_check_local,
+            "next_check_in_minutes": self.next_check_in_minutes,
             "calls": [c.to_dict() if hasattr(c, "to_dict") else c for c in self.calls],
             "cost_usd_est": self.cost_usd_est,
+            "error": self.error,
         }

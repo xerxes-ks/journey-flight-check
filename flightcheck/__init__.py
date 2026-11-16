@@ -1,6 +1,7 @@
 """flightcheck: live flight status, delay prediction, and connection-risk scoring.
 
 v0.1 is stateless. Scheduling, messaging, and trip manifests belong to callers.
+Times in the public API are origin/destination local; callers should not convert to UTC.
 """
 
 from .cadence import poll_interval

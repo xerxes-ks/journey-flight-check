@@ -2,70 +2,43 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/xerxes-ks/journey-flight-check/schema/check_flight.tool.json",
   "name": "check_flight",
-  "description": "Look up a flight by number and date, return live status (UTC and local times, gates, terminals, baggage, aircraft, registration), a delay prediction from the airline estimate then inbound aircraft ETA plus a minimum turn then an optional historical prior, optional connection risk versus an onward flight, and the AeroAPI calls made with an estimated cost. Stateless: callers own scheduling and messaging.",
+  "description": "Look up a flight by the number and the departure DATE PRINTED ON THE TICKET (the origin airport's local calendar date). Pass that date unchanged — never convert ticket times or dates to UTC, and do not send a timezone. Returns airport-local times (ISO with offset, IANA tz, and a short human form), a delay prediction, optional connection risk, next_check_local for a cron, and a one-sentence summary a chat bot can relay as-is.",
   "inputSchema": {
     "type": "object",
     "additionalProperties": false,
-    "required": ["ident", "date"],
+    "required": ["flight", "date"],
     "properties": {
-      "ident": {
+      "flight": {
         "type": "string",
-        "description": "Flight number (IATA or ICAO designator), e.g. XX123.",
+        "description": "Flight number as printed (IATA or ICAO), e.g. XX754. Spaces and case are ignored.",
         "minLength": 2
       },
       "date": {
         "type": "string",
         "format": "date",
-        "description": "Departure date (YYYY-MM-DD). Matched against the origin-local scheduled-out date, with UTC as fallback."
+        "description": "Origin-local departure date as printed on the ticket (YYYY-MM-DD). Do not convert to UTC."
       },
       "origin": {
         "type": "string",
-        "description": "Optional IATA departure airport used to disambiguate duplicate flight numbers.",
+        "description": "Optional IATA departure airport, used to disambiguate duplicate flight numbers and to resolve timezone before the first AeroAPI call.",
         "minLength": 3,
         "maxLength": 4
       },
       "onward": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["ident"],
+        "required": ["flight", "date"],
         "properties": {
-          "ident": { "type": "string", "description": "Onward flight number." },
-          "date": { "type": "string", "format": "date" },
+          "flight": { "type": "string", "description": "Onward flight number as printed." },
+          "date": {
+            "type": "string",
+            "format": "date",
+            "description": "Onward origin-local date as printed on the ticket. Do not convert to UTC."
+          },
           "origin": { "type": "string" },
-          "min_connection_min": { "type": "integer", "minimum": 0, "default": 45 },
-          "terminal_change": { "type": "boolean", "default": false },
-          "terminal_change_min": { "type": "integer", "minimum": 0, "default": 20 },
-          "bag_recheck": { "type": "boolean", "default": false },
-          "checkin_close_min": { "type": "integer", "minimum": 0, "default": 45 },
-          "separate_ticket": { "type": "boolean", "default": false }
-        }
-      },
-      "budget_usd": {
-        "type": "number",
-        "minimum": 0,
-        "default": 0.05,
-        "description": "Hard cap on estimated AeroAPI spend for this call."
-      },
-      "min_turn": {
-        "type": "integer",
-        "minimum": 0,
-        "default": 30,
-        "description": "Minimum minutes from inbound gate-in to this flight's push-back."
-      },
-      "inbound_window_h": {
-        "type": "number",
-        "minimum": 0,
-        "default": 6,
-        "description": "Only fetch the inbound aircraft when departure is within this many hours."
-      },
-      "prior": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "dep_median": { "type": "integer" },
-          "arr_median": { "type": "integer" },
-          "n": { "type": "integer", "minimum": 0 },
-          "source": { "type": "string" }
+          "min_connect_min": { "type": "integer", "minimum": 0, "default": 45 },
+          "separate_ticket": { "type": "boolean", "default": false },
+          "bags_recheck": { "type": "boolean", "default": false }
         }
       }
     }
@@ -73,8 +46,13 @@
   "outputSchema": {
     "type": "object",
     "additionalProperties": false,
-    "required": ["flight", "inbound", "prediction", "connection", "calls", "cost_usd_est"],
+    "required": [
+      "ok", "summary", "flight", "inbound", "prediction", "connection",
+      "next_check_local", "next_check_in_minutes", "calls", "cost_usd_est", "error"
+    ],
     "properties": {
+      "ok": { "type": "boolean" },
+      "summary": { "type": "string", "description": "One plain sentence a chat bot can relay as-is." },
       "flight": { "$ref": "#/$defs/flight" },
       "inbound": {
         "anyOf": [
@@ -89,13 +67,18 @@
           { "$ref": "#/$defs/connection" }
         ]
       },
+      "next_check_local": { "$ref": "#/$defs/instantOrNull" },
+      "next_check_in_minutes": { "type": ["integer", "null"] },
       "calls": {
         "type": "array",
         "items": { "$ref": "#/$defs/call" }
       },
-      "cost_usd_est": {
-        "type": "number",
-        "description": "Estimated AeroAPI spend for this check. Confirm against the FlightAware usage page."
+      "cost_usd_est": { "type": "number" },
+      "error": {
+        "anyOf": [
+          { "type": "null" },
+          { "$ref": "#/$defs/error" }
+        ]
       }
     }
   },
@@ -103,11 +86,17 @@
     "instant": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["utc", "local", "timezone"],
+      "required": ["local", "tz", "human"],
       "properties": {
-        "utc": { "type": "string" },
-        "local": { "type": "string" },
-        "timezone": { "type": "string" }
+        "local": {
+          "type": "string",
+          "description": "ISO-8601 datetime with the airport's offset. Not UTC unless the airport is on UTC."
+        },
+        "tz": { "type": "string", "description": "IANA timezone name of the relevant airport." },
+        "human": {
+          "type": "string",
+          "description": "Short form such as '02:55 Sun 13 Dec (DEL time)'."
+        }
       }
     },
     "instantOrNull": {
@@ -152,12 +141,12 @@
         "registration": { "type": "string" },
         "status": {
           "type": "string",
-          "enum": ["scheduled", "active", "landed", "cancelled", "diverted", "unknown"]
+          "enum": ["scheduled", "active", "landed", "cancelled", "diverted", "unknown", "too_early"]
         },
         "cancelled": { "type": "boolean" },
         "diverted": { "type": "boolean" },
         "divert_to": { "type": "string" },
-        "source": { "type": "string", "enum": ["aeroapi", "schedule"] },
+        "source": { "type": "string", "enum": ["aeroapi", "schedule", "none"] },
         "live": { "type": "boolean" }
       }
     },
@@ -183,7 +172,7 @@
         "arr_delay_min": { "type": "integer" },
         "expected_out": { "$ref": "#/$defs/instantOrNull" },
         "expected_in": { "$ref": "#/$defs/instantOrNull" },
-        "band": { "type": "string", "enum": ["on_track", "watch", "at_risk"] },
+        "band": { "type": "string", "enum": ["on_track", "watch", "at_risk", "unknown"] },
         "reasons": { "type": "array", "items": { "type": "string" } },
         "final": { "type": "boolean" },
         "schedule_only": { "type": "boolean" }
@@ -194,7 +183,7 @@
       "additionalProperties": false,
       "required": ["band", "slack_min", "required_min", "protected", "explain", "onward_ident"],
       "properties": {
-        "band": { "type": "string", "enum": ["on_track", "watch", "at_risk"] },
+        "band": { "type": "string", "enum": ["on_track", "watch", "at_risk", "unknown"] },
         "slack_min": { "type": "integer" },
         "required_min": { "type": "integer" },
         "protected": { "type": "boolean" },
@@ -212,6 +201,23 @@
         "http": { "type": "integer" },
         "cost_usd": { "type": "number" },
         "ms": { "type": "integer" }
+      }
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message"],
+      "properties": {
+        "code": {
+          "type": "string",
+          "enum": [
+            "no_data", "not_found", "bad_request", "rate_limited",
+            "unauthorized", "forbidden", "upstream_error", "budget_exceeded", "error"
+          ]
+        },
+        "message": { "type": "string" },
+        "http": { "type": "integer" },
+        "snippet": { "type": "string" }
       }
     }
   }

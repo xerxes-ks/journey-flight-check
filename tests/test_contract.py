@@ -22,7 +22,6 @@ def schema():
 
 def validator(schema):
     output = schema["outputSchema"]
-    # Resolve $defs from the parent document.
     return jsonschema.Draft202012Validator(
         {"$defs": schema["$defs"], **output},
         format_checker=jsonschema.Draft202012Validator.FORMAT_CHECKER,
@@ -30,36 +29,46 @@ def validator(schema):
 
 
 CASES = [
-    ("on_time", {"ident": "XX123", "date": "2027-03-15", "origin": "XXA"}, scenario_fetch()),
+    ("on_time", {"flight": "XX123", "date": "2027-03-15", "origin": "XXA"}, scenario_fetch()),
     (
         "onward",
         {
-            "ident": "XX123",
+            "flight": "XX123",
             "date": "2027-03-15",
             "origin": "XXA",
-            "onward": {"ident": "YY456", "min_connection_min": 45, "separate_ticket": True},
+            "onward": {
+                "flight": "YY456",
+                "date": "2027-03-15",
+                "min_connect_min": 45,
+                "separate_ticket": True,
+            },
         },
         scenario_fetch(),
     ),
     (
         "inbound_late",
-        {"ident": "XX123", "date": "2027-03-15", "origin": "XXA"},
+        {"flight": "XX123", "date": "2027-03-15", "origin": "XXA"},
         scenario_fetch(inbound="xx122-late.json"),
     ),
     (
         "cancelled",
-        {"ident": "XX123", "date": "2027-03-15"},
+        {"flight": "XX123", "date": "2027-03-15"},
         scenario_fetch(flight="xx123-cancelled.json"),
     ),
     (
         "diverted",
-        {"ident": "XX123", "date": "2027-03-15"},
+        {"flight": "XX123", "date": "2027-03-15"},
         scenario_fetch(flight="xx123-diverted.json"),
     ),
     (
-        "schedule_only",
-        {"ident": "XX123", "date": "2027-03-15"},
+        "unknown",
+        {"flight": "XX123", "date": "2027-03-15"},
         make_fetch({"/flights/": (200, load_fx("empty.json"))}),
+    ),
+    (
+        "too_early",
+        {"flight": "XX123", "date": "2027-04-01", "origin": "LAX"},
+        scenario_fetch(),
     ),
 ]
 
@@ -73,20 +82,26 @@ def test_output_matches_schema(schema, name, payload, fetch):
 
 def test_input_example_matches_schema(schema):
     example = {
-        "ident": "XX123",
+        "flight": "XX123",
         "date": "2026-12-10",
-        "origin": "XXA",
+        "origin": "LAX",
         "onward": {
-            "ident": "YY456",
-            "min_connection_min": 60,
-            "terminal_change": True,
-            "bag_recheck": True,
+            "flight": "YY456",
+            "date": "2026-12-10",
+            "min_connect_min": 60,
+            "bags_recheck": True,
             "separate_ticket": True,
         },
-        "budget_usd": 0.05,
-        "min_turn": 30,
     }
     jsonschema.Draft202012Validator(
         {"$defs": schema["$defs"], **schema["inputSchema"]},
         format_checker=jsonschema.Draft202012Validator.FORMAT_CHECKER,
     ).validate(example)
+
+
+def test_tool_schema_is_tiny(schema):
+    props = set(schema["inputSchema"]["properties"])
+    assert props == {"flight", "date", "origin", "onward"}
+    assert schema["inputSchema"]["required"] == ["flight", "date"]
+    onward = set(schema["inputSchema"]["properties"]["onward"]["properties"])
+    assert onward == {"flight", "date", "origin", "min_connect_min", "separate_ticket", "bags_recheck"}
