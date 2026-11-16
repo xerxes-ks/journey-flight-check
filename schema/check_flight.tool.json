@@ -1,0 +1,251 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/xerxes-ks/journey-flight-check/schema/check_flight.tool.json",
+  "name": "check_flight",
+  "description": "Look up a flight by the number and the departure DATE PRINTED ON THE TICKET (the origin airport's local calendar date). Pass that date unchanged — never convert ticket times or dates to UTC, and do not send a timezone. Returns airport-local times (ISO with offset, IANA tz, and a short human form), a delay prediction, optional connection risk, checked_at (UTC), next_poll_min for a cron, and a one-sentence summary a chat bot can relay as-is.",
+  "inputSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["flight", "date"],
+    "properties": {
+      "flight": {
+        "type": "string",
+        "description": "Flight number as printed (IATA or ICAO), e.g. XX754. Spaces and case are ignored.",
+        "minLength": 2
+      },
+      "date": {
+        "type": "string",
+        "format": "date",
+        "description": "Origin-local departure date as printed on the ticket (YYYY-MM-DD). Do not convert to UTC."
+      },
+      "origin": {
+        "type": "string",
+        "description": "Optional IATA departure airport, used to disambiguate duplicate flight numbers and to resolve timezone before the first AeroAPI call.",
+        "minLength": 3,
+        "maxLength": 4
+      },
+      "onward": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["flight", "date"],
+        "properties": {
+          "flight": { "type": "string", "description": "Onward flight number as printed." },
+          "date": {
+            "type": "string",
+            "format": "date",
+            "description": "Onward origin-local date as printed on the ticket. Do not convert to UTC."
+          },
+          "origin": { "type": "string" },
+          "min_connect_min": { "type": "integer", "minimum": 0, "default": 45 },
+          "separate_ticket": { "type": "boolean", "default": false },
+          "bags_recheck": { "type": "boolean", "default": false },
+          "terminal_change": { "type": "boolean", "default": false },
+          "terminal_change_min": { "type": "integer", "minimum": 0, "default": 20 },
+          "checkin_close_min": {
+            "type": "integer",
+            "minimum": 0,
+            "default": 45,
+            "description": "Minutes before onward departure that bag-drop or check-in closes (separate tickets / bag recheck)."
+          }
+        }
+      }
+    }
+  },
+  "outputSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "ok", "status", "band", "final", "summary", "flight", "inbound",
+      "prediction", "connection", "checked_at", "next_check_local",
+      "next_check_in_minutes", "next_poll_min", "calls", "cost_usd_est", "error"
+    ],
+    "properties": {
+      "ok": { "type": "boolean" },
+      "status": {
+        "type": "string",
+        "enum": ["scheduled", "active", "landed", "cancelled", "diverted", "unknown", "too_early"]
+      },
+      "band": { "type": "string", "enum": ["on_track", "watch", "at_risk", "unknown"] },
+      "final": { "type": "boolean" },
+      "summary": { "type": "string", "description": "One plain sentence a chat bot can relay as-is." },
+      "flight": { "$ref": "#/$defs/flight" },
+      "inbound": {
+        "anyOf": [
+          { "type": "null" },
+          { "$ref": "#/$defs/inbound" }
+        ]
+      },
+      "prediction": { "$ref": "#/$defs/prediction" },
+      "connection": {
+        "anyOf": [
+          { "type": "null" },
+          { "$ref": "#/$defs/connection" }
+        ]
+      },
+      "checked_at": {
+        "type": "string",
+        "description": "UTC timestamp (ISO-8601 with Z) of this check. Store it with the result to judge freshness."
+      },
+      "next_check_local": { "$ref": "#/$defs/instantOrNull" },
+      "next_check_in_minutes": { "type": ["integer", "null"] },
+      "next_poll_min": {
+        "type": ["integer", "null"],
+        "description": "Minutes until the next useful check, same as next_check_in_minutes. Null means do not poll again (landed, cancelled, diverted). too_early returns minutes until the flight can become visible, not null."
+      },
+      "calls": {
+        "type": "array",
+        "items": { "$ref": "#/$defs/call" }
+      },
+      "cost_usd_est": { "type": "number" },
+      "error": {
+        "anyOf": [
+          { "type": "null" },
+          { "$ref": "#/$defs/error" }
+        ]
+      }
+    }
+  },
+  "$defs": {
+    "instant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["local", "tz", "human"],
+      "properties": {
+        "local": {
+          "type": "string",
+          "description": "ISO-8601 datetime with the airport's offset. Not UTC unless the airport is on UTC."
+        },
+        "tz": { "type": "string", "description": "IANA timezone name of the relevant airport." },
+        "human": {
+          "type": "string",
+          "description": "Short form such as '02:55 Sun 13 Dec (DEL time)'."
+        }
+      }
+    },
+    "instantOrNull": {
+      "anyOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/instant" }
+      ]
+    },
+    "flight": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ident", "ident_iata", "ident_icao", "fa_flight_id",
+        "origin", "destination",
+        "scheduled_out", "estimated_out", "actual_out",
+        "scheduled_in", "estimated_in", "actual_in",
+        "gate_origin", "gate_destination",
+        "terminal_origin", "terminal_destination",
+        "baggage_claim", "aircraft_type", "registration",
+        "status", "cancelled", "diverted", "divert_to",
+        "source", "live"
+      ],
+      "properties": {
+        "ident": { "type": "string" },
+        "ident_iata": { "type": "string" },
+        "ident_icao": { "type": "string" },
+        "fa_flight_id": { "type": "string" },
+        "origin": { "type": "string" },
+        "destination": { "type": "string" },
+        "scheduled_out": { "$ref": "#/$defs/instantOrNull" },
+        "estimated_out": { "$ref": "#/$defs/instantOrNull" },
+        "actual_out": { "$ref": "#/$defs/instantOrNull" },
+        "scheduled_in": { "$ref": "#/$defs/instantOrNull" },
+        "estimated_in": { "$ref": "#/$defs/instantOrNull" },
+        "actual_in": { "$ref": "#/$defs/instantOrNull" },
+        "gate_origin": { "type": "string" },
+        "gate_destination": { "type": "string" },
+        "terminal_origin": { "type": "string" },
+        "terminal_destination": { "type": "string" },
+        "baggage_claim": { "type": "string" },
+        "aircraft_type": { "type": "string" },
+        "registration": { "type": "string" },
+        "status": {
+          "type": "string",
+          "enum": ["scheduled", "active", "landed", "cancelled", "diverted", "unknown", "too_early"]
+        },
+        "cancelled": { "type": "boolean" },
+        "diverted": { "type": "boolean" },
+        "divert_to": { "type": "string" },
+        "source": { "type": "string", "enum": ["aeroapi", "schedule", "none"] },
+        "live": { "type": "boolean" }
+      }
+    },
+    "inbound": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ident", "est_arr", "status"],
+      "properties": {
+        "ident": { "type": "string" },
+        "est_arr": { "$ref": "#/$defs/instantOrNull" },
+        "status": { "type": "string" }
+      }
+    },
+    "prediction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dep_delay_min", "arr_delay_min", "expected_out", "expected_in",
+        "band", "reasons", "final", "schedule_only"
+      ],
+      "properties": {
+        "dep_delay_min": { "type": "integer" },
+        "arr_delay_min": { "type": "integer" },
+        "expected_out": { "$ref": "#/$defs/instantOrNull" },
+        "expected_in": { "$ref": "#/$defs/instantOrNull" },
+        "band": { "type": "string", "enum": ["on_track", "watch", "at_risk", "unknown"] },
+        "reasons": { "type": "array", "items": { "type": "string" } },
+        "final": { "type": "boolean" },
+        "schedule_only": { "type": "boolean" }
+      }
+    },
+    "connection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["band", "slack_min", "required_min", "protected", "explain", "onward_ident"],
+      "properties": {
+        "band": { "type": "string", "enum": ["on_track", "watch", "at_risk", "unknown"] },
+        "slack_min": { "type": "integer" },
+        "required_min": { "type": "integer" },
+        "protected": { "type": "boolean" },
+        "explain": { "type": "string" },
+        "onward_ident": { "type": "string" }
+      }
+    },
+    "call": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "params", "http", "cost_usd", "ms"],
+      "properties": {
+        "path": { "type": "string" },
+        "params": { "type": "object" },
+        "http": { "type": "integer" },
+        "cost_usd": { "type": "number" },
+        "ms": { "type": "integer" }
+      }
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message", "retryable"],
+      "properties": {
+        "code": {
+          "type": "string",
+          "enum": [
+            "flight_not_found", "no_data", "not_found", "bad_request",
+            "rate_limited", "upstream_rate_limited",
+            "unauthorized", "forbidden",
+            "upstream_error", "upstream_unavailable", "timeout",
+            "budget_exceeded", "error"
+          ]
+        },
+        "message": { "type": "string" },
+        "retryable": { "type": "boolean" },
+        "http": { "type": "integer" },
+        "snippet": { "type": "string" }
+      }
+    }
+  }
+}

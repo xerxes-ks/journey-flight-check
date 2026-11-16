@@ -1,0 +1,114 @@
+"""Shared fixtures. All AeroAPI traffic is injected; tests never open a network socket.
+
+The fake fetch rejects start/end the way AeroAPI does (~47h ahead, 10 days back)
+so an unclamped window cannot silently succeed.
+"""
+
+from __future__ import annotations
+
+import datetime as dt
+import json
+import os
+from copy import deepcopy
+
+import pytest
+
+from flightcheck.model import UTC, WINDOW_END_MAX_AHEAD_H, WINDOW_START_MAX_PAST_DAYS, parse_time
+
+FX = os.path.join(os.path.dirname(__file__), "fixtures", "aeroapi")
+
+NEAR_DEP = "2027-03-15T16:30:00Z"  # T-90 min vs 18:00Z STD
+FAR_DEP = "2027-03-15T08:00:00Z"   # T-10 h, outside the 6 h inbound window
+
+
+def load_fx(name: str) -> dict:
+    with open(os.path.join(FX, name)) as fh:
+        return json.load(fh)
+
+
+def aeroapi_window_error(params: dict, now: dt.datetime) -> str | None:
+    """Mirror AeroAPI's documented start/end bounds (end ≤ now+~2 days)."""
+    if not params:
+        return None
+    if "start" not in params and "end" not in params:
+        return None
+    start = parse_time(params.get("start"))
+    end = parse_time(params.get("end"))
+    now = now.astimezone(UTC)
+    ahead = dt.timedelta(hours=WINDOW_END_MAX_AHEAD_H)
+    past = dt.timedelta(days=WINDOW_START_MAX_PAST_DAYS)
+    if end and end > now + ahead:
+        return "end is more than 2 days in the future"
+    if start and start > now + ahead:
+        return "start is more than 2 days in the future"
+    if start and start < now - past:
+        return "start is more than 10 days in the past"
+    if end and end < now - past:
+        return "end is more than 10 days in the past"
+    return None
+
+
+def _filter_flights_to_window(body: dict, params: dict) -> dict:
+    """AeroAPI only returns instances whose scheduled_out falls in [start, end)."""
+    if not isinstance(body, dict) or "flights" not in body:
+        return body
+    start = parse_time((params or {}).get("start"))
+    end = parse_time((params or {}).get("end"))
+    if not start and not end:
+        return body
+    kept = []
+    for f in body.get("flights") or []:
+        t = parse_time((f or {}).get("scheduled_out") or (f or {}).get("scheduled_off"))
+        if t is None:
+            kept.append(f)
+            continue
+        if start and t < start:
+            continue
+        if end and t >= end:
+            continue
+        kept.append(f)
+    out = dict(body)
+    out["flights"] = kept
+    return out
+
+
+def make_fetch(mapping: dict[str, tuple[int, dict]], now=NEAR_DEP):
+    """Exact path match, then longest prefix. Tests never hit the network."""
+    now_dt = parse_time(now) if not isinstance(now, dt.datetime) else now
+
+    def fetch(path, params):
+        bad = aeroapi_window_error(params or {}, now_dt)
+        if bad:
+            return 400, {"title": "Invalid request", "detail": bad, "status": 400}
+        body = None
+        status = None
+        if path in mapping:
+            status, body = mapping[path]
+        else:
+            for prefix in sorted(mapping, key=len, reverse=True):
+                if path.startswith(prefix):
+                    status, body = mapping[prefix]
+                    break
+        if body is None:
+            return 404, {"title": "Not Found"}
+        body = deepcopy(body)
+        return status, _filter_flights_to_window(body, params or {})
+
+    return fetch
+
+
+def scenario_fetch(*, flight="xx123.json", inbound="xx122.json", onward="yy456.json", now=NEAR_DEP):
+    return make_fetch({
+        "/flights/XX123": (200, load_fx(flight)),
+        "/flights/XXX123": (200, load_fx(flight)),
+        "/flights/XXX122-1700000000-airline-0002": (200, load_fx(inbound)),
+        "/flights/YY456": (200, load_fx(onward)),
+        "/flights/YYY456": (200, load_fx(onward)),
+        "/flights/XX754": (200, load_fx("xx754-del.json")),
+        "/flights/XXX754": (200, load_fx("xx754-del.json")),
+    }, now=now)
+
+
+@pytest.fixture
+def fetch_on_time():
+    return scenario_fetch()
