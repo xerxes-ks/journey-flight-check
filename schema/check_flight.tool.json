@@ -24,6 +24,32 @@
         "minLength": 3,
         "maxLength": 4
       },
+      "cadence": {
+        "type": "string",
+        "enum": ["essential", "dense"],
+        "default": "essential",
+        "description": "essential (default, ~7–9 calls) or dense (legacy 15-min table)."
+      },
+      "alert_delay_min": {
+        "type": "integer",
+        "minimum": 0,
+        "default": 45,
+        "description": "Arrival delay in minutes at which the punctuality band becomes at_risk (watch is above 15 min up to this value)."
+      },
+      "previous_checkpoint": {
+        "type": "string",
+        "description": "Echo checkpoint from the last result so cancelled/takeoff/landing retries are counted."
+      },
+      "attempts": {
+        "type": "integer",
+        "minimum": 0,
+        "default": 0,
+        "description": "Echo attempts from the last result."
+      },
+      "previous_gate": {
+        "type": "string",
+        "description": "Last known origin gate, so a gate change can be mentioned in the summary."
+      },
       "onward": {
         "type": "object",
         "additionalProperties": false,
@@ -36,7 +62,12 @@
             "description": "Onward origin-local date as printed on the ticket. Do not convert to UTC."
           },
           "origin": { "type": "string" },
-          "min_connect_min": { "type": "integer", "minimum": 0, "default": 45 },
+          "min_connect_min": {
+            "type": "integer",
+            "minimum": 0,
+            "default": 45,
+            "description": "Default 90 min when separate_ticket or bags_recheck is true (self-transfer)."
+          },
           "separate_ticket": { "type": "boolean", "default": false },
           "bags_recheck": { "type": "boolean", "default": false },
           "terminal_change": { "type": "boolean", "default": false },
@@ -55,9 +86,10 @@
     "type": "object",
     "additionalProperties": false,
     "required": [
-      "ok", "status", "band", "final", "summary", "flight", "inbound",
+      "ok", "status", "band", "impact_band", "phase", "checkpoint", "attempts",
+      "final", "summary", "flight", "inbound",
       "prediction", "connection", "checked_at", "next_check_local",
-      "next_check_in_minutes", "next_poll_min", "calls", "cost_usd_est", "error"
+      "next_check_in_minutes", "next_poll_min", "calls", "cost_usd_est", "error", "warning"
     ],
     "properties": {
       "ok": { "type": "boolean" },
@@ -66,6 +98,21 @@
         "enum": ["scheduled", "active", "landed", "cancelled", "diverted", "unknown", "too_early"]
       },
       "band": { "type": "string", "enum": ["on_track", "watch", "at_risk", "unknown"] },
+      "impact_band": {
+        "anyOf": [
+          { "type": "null" },
+          { "type": "string", "enum": ["on_track", "watch", "at_risk", "unknown"] }
+        ]
+      },
+      "phase": {
+        "type": "string",
+        "enum": ["scheduled", "at_gate_late", "taxiing", "airborne", "landed", "at_arrival_gate"]
+      },
+      "checkpoint": {
+        "type": "string",
+        "enum": ["t_minus_24h", "t_minus_6h", "t_minus_3h", "t_minus_1h", "takeoff", "landing", "done"]
+      },
+      "attempts": { "type": "integer" },
       "final": { "type": "boolean" },
       "summary": { "type": "string", "description": "One plain sentence a chat bot can relay as-is." },
       "flight": { "$ref": "#/$defs/flight" },
@@ -90,7 +137,7 @@
       "next_check_in_minutes": { "type": ["integer", "null"] },
       "next_poll_min": {
         "type": ["integer", "null"],
-        "description": "Minutes until the next useful check, same as next_check_in_minutes. Null means do not poll again (landed, cancelled, diverted). too_early returns minutes until the flight can become visible, not null."
+        "description": "Minutes until the next essential checkpoint, same as next_check_in_minutes. Null only when final (done). too_early returns minutes until T-24h."
       },
       "calls": {
         "type": "array",
@@ -98,6 +145,12 @@
       },
       "cost_usd_est": { "type": "number" },
       "error": {
+        "anyOf": [
+          { "type": "null" },
+          { "$ref": "#/$defs/error" }
+        ]
+      },
+      "warning": {
         "anyOf": [
           { "type": "null" },
           { "$ref": "#/$defs/error" }
@@ -134,12 +187,12 @@
       "required": [
         "ident", "ident_iata", "ident_icao", "fa_flight_id",
         "origin", "destination",
-        "scheduled_out", "estimated_out", "actual_out",
-        "scheduled_in", "estimated_in", "actual_in",
+        "scheduled_out", "estimated_out", "actual_out", "actual_off",
+        "scheduled_in", "estimated_in", "actual_in", "actual_on",
         "gate_origin", "gate_destination",
         "terminal_origin", "terminal_destination",
         "baggage_claim", "aircraft_type", "registration",
-        "status", "cancelled", "diverted", "divert_to",
+        "status", "status_text", "progress_percent", "cancelled", "diverted", "divert_to",
         "source", "live"
       ],
       "properties": {
@@ -152,9 +205,11 @@
         "scheduled_out": { "$ref": "#/$defs/instantOrNull" },
         "estimated_out": { "$ref": "#/$defs/instantOrNull" },
         "actual_out": { "$ref": "#/$defs/instantOrNull" },
+        "actual_off": { "$ref": "#/$defs/instantOrNull" },
         "scheduled_in": { "$ref": "#/$defs/instantOrNull" },
         "estimated_in": { "$ref": "#/$defs/instantOrNull" },
         "actual_in": { "$ref": "#/$defs/instantOrNull" },
+        "actual_on": { "$ref": "#/$defs/instantOrNull" },
         "gate_origin": { "type": "string" },
         "gate_destination": { "type": "string" },
         "terminal_origin": { "type": "string" },
@@ -166,6 +221,8 @@
           "type": "string",
           "enum": ["scheduled", "active", "landed", "cancelled", "diverted", "unknown", "too_early"]
         },
+        "status_text": { "type": "string" },
+        "progress_percent": { "type": ["integer", "null"] },
         "cancelled": { "type": "boolean" },
         "diverted": { "type": "boolean" },
         "divert_to": { "type": "string" },
@@ -176,11 +233,13 @@
     "inbound": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["ident", "est_arr", "status"],
+      "required": ["ident", "est_arr", "status", "cancelled", "diverted"],
       "properties": {
         "ident": { "type": "string" },
         "est_arr": { "$ref": "#/$defs/instantOrNull" },
-        "status": { "type": "string" }
+        "status": { "type": "string" },
+        "cancelled": { "type": "boolean" },
+        "diverted": { "type": "boolean" }
       }
     },
     "prediction": {

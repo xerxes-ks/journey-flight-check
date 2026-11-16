@@ -4,7 +4,7 @@ v0.1 is stateless. Scheduling, messaging, and trip manifests belong to callers.
 Times in the public API are origin/destination local; callers should not convert to UTC.
 """
 
-from .cadence import poll_interval
+from .cadence import essential_plan, poll_interval
 from .check import check_flight
 from .exceptions import AeroAPIError, BudgetExceeded, CheckError
 from .model import CheckRequest, OnwardRequest, Prior
@@ -19,6 +19,7 @@ __all__ = [
     "OnwardRequest",
     "Prior",
     "check_flight",
+    "essential_plan",
     "poll_interval",
     "__version__",
 ]

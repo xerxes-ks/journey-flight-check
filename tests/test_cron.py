@@ -26,9 +26,11 @@ def _evolving_fetch(now: dt.datetime):
         f["estimated_in"] = f["scheduled_in"]
         if now >= std:
             f["actual_out"] = std.strftime("%Y-%m-%dT%H:%M:%SZ")
+            f["actual_off"] = (std + dt.timedelta(minutes=12)).strftime("%Y-%m-%dT%H:%M:%SZ")
             f["status"] = "En Route"
         if now >= sta:
-            f["actual_in"] = sta.strftime("%Y-%m-%dT%H:%M:%SZ")
+            f["actual_on"] = sta.strftime("%Y-%m-%dT%H:%M:%SZ")
+            f["actual_in"] = (sta + dt.timedelta(minutes=8)).strftime("%Y-%m-%dT%H:%M:%SZ")
             f["status"] = "Arrived"
     return make_fetch({
         "/flights/XX754": (200, body),
@@ -39,14 +41,24 @@ def _evolving_fetch(now: dt.datetime):
 def test_cron_follows_next_check_from_30_days_out_to_landing():
     now = STD - dt.timedelta(days=30)
     seen = set()
+    checks = []
     steps = 0
-    while steps < 400:
+    prev_cp, prev_att = None, 0
+    while steps < 40:
         r = check_flight(
-            {"flight": "XX754", "date": "2027-12-13", "origin": "DEL"},
+            {
+                "flight": "XX754",
+                "date": "2027-12-13",
+                "origin": "DEL",
+                "previous_checkpoint": prev_cp,
+                "attempts": prev_att,
+            },
             fetch=_evolving_fetch(now),
             now=now,
         )
         seen.add(r.flight.status)
+        checks.append(r.checkpoint)
+        prev_cp, prev_att = r.checkpoint, r.attempts
         if r.final or r.flight.status == "landed":
             assert r.next_check_local is None
             assert r.flight.status == "landed"
@@ -62,6 +74,9 @@ def test_cron_follows_next_check_from_30_days_out_to_landing():
     assert "too_early" in seen
     assert "landed" in seen
     assert seen & {"unknown", "scheduled", "active"}
+    assert 6 <= steps <= 12
+    assert "t_minus_24h" in checks
+    assert "landing" in checks or "done" in checks
 
 
 def test_gap_before_visibility_does_not_kill_cron():

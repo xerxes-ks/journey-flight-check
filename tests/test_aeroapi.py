@@ -20,12 +20,15 @@ def test_budget_exceeded_stops_before_second_call():
 
 
 def test_budget_exceeded_via_check_flight():
-    with pytest.raises(BudgetExceeded):
-        check_flight(
-            {"flight": "XX123", "date": "2027-03-15", "origin": "XXA", "budget": 0.005},
-            fetch=scenario_fetch(),
-            now=parse_time(NEAR_DEP),
-        )
+    r = check_flight(
+        {"flight": "XX123", "date": "2027-03-15", "origin": "XXA", "budget": 0.005},
+        fetch=scenario_fetch(),
+        now=parse_time(NEAR_DEP),
+    )
+    assert r.flight.ident_iata == "XX123"
+    assert r.warning and r.warning["code"] == "budget_exceeded"
+    assert r.ok is True
+    assert r.inbound is None
 
 
 def test_http_error_keeps_sanitized_snippet():

@@ -214,7 +214,7 @@ class AeroAPIAdapter:
         noon = dt.datetime.combine(day, dt.time(12, 0), tzinfo=UTC)
         return min(dated, key=lambda f: abs((sched(f) - noon).total_seconds()))
 
-    def lookup(self, ident, date, *, origin=None, now=None, fetch_inbound=True, min_turn=None,
+    def lookup(self, ident, date, *, origin=None, now=None, fetch_inbound=True,             min_turn=None,
                origin_tz: str = "UTC"):
         ident = normalize_ident(ident)
         day = parse_date(date)
@@ -231,39 +231,49 @@ class AeroAPIAdapter:
         if not raw:
             return None
         flight = self.to_flight(raw)
+        if fetch_inbound:
+            self.attach_inbound(flight, now=now)
+        return flight
+
+    def attach_inbound(self, flight: Flight, *, now=None):
+        now = now or dt.datetime.now(UTC)
+        inbound_id = flight.inbound_fa_flight_id
         if (
-            fetch_inbound
-            and raw.get("inbound_fa_flight_id")
-            and not flight.act_out
-            and not flight.cancelled
-            and flight.sched_out
-            and flight.sched_out - now <= self.inbound_window
+            not inbound_id
+            or flight.act_out
+            or flight.act_off
+            or flight.cancelled
+            or not flight.sched_out
+            or flight.sched_out - now > self.inbound_window
         ):
-            inbound_id = raw["inbound_fa_flight_id"]
-            try:
-                ibody = self.call(
-                    f"/flights/{urllib.parse.quote(inbound_id, safe='')}",
-                    {"ident_type": "fa_flight_id"},
-                )
-            except AeroAPIError:
-                ibody = {}
-            fl = ibody.get("flights") or []
-            if fl:
-                inbound = fl[0]
-                dest = inbound.get("destination") or {}
-                dest_tz = dest.get("timezone") or flight.origin_tz
-                dest_iata = dest.get("code_iata") or flight.origin
-                flight.inbound = Inbound(
-                    ident=inbound.get("ident_iata") or inbound.get("ident") or "",
-                    est_arr=parse_time(
-                        inbound.get("actual_in")
-                        or inbound.get("estimated_in")
-                        or inbound.get("scheduled_in")
-                    ),
-                    status=inbound.get("status") or "",
-                    dest_tz=dest_tz,
-                    dest_iata=dest_iata,
-                )
+            return flight
+        try:
+            ibody = self.call(
+                f"/flights/{urllib.parse.quote(inbound_id, safe='')}",
+                {"ident_type": "fa_flight_id"},
+            )
+        except AeroAPIError:
+            return flight
+        fl = ibody.get("flights") or []
+        if not fl:
+            return flight
+        inbound = fl[0]
+        dest = inbound.get("destination") or {}
+        dest_tz = dest.get("timezone") or flight.origin_tz
+        dest_iata = dest.get("code_iata") or flight.origin
+        flight.inbound = Inbound(
+            ident=inbound.get("ident_iata") or inbound.get("ident") or "",
+            est_arr=parse_time(
+                inbound.get("actual_in")
+                or inbound.get("estimated_in")
+                or inbound.get("scheduled_in")
+            ),
+            status=inbound.get("status") or "",
+            dest_tz=dest_tz,
+            dest_iata=dest_iata,
+            cancelled=bool(inbound.get("cancelled")),
+            diverted=bool(inbound.get("diverted")),
+        )
         return flight
 
     @staticmethod
@@ -275,7 +285,7 @@ class AeroAPIAdapter:
             status = "diverted"
         elif f.get("actual_in") or f.get("actual_on"):
             status = "landed"
-        elif f.get("actual_out") or f.get("actual_off"):
+        elif f.get("actual_off"):
             status = "active"
         else:
             status = "scheduled"
@@ -283,6 +293,11 @@ class AeroAPIAdapter:
         dest = f.get("destination") or {}
         ident_iata = f.get("ident_iata") or ""
         ident_icao = f.get("ident_icao") or f.get("ident") or ""
+        progress = f.get("progress_percent")
+        try:
+            progress = int(progress) if progress is not None and progress != "" else None
+        except (TypeError, ValueError):
+            progress = None
         return Flight(
             ident=ident_iata or ident_icao,
             ident_iata=ident_iata,
@@ -294,10 +309,12 @@ class AeroAPIAdapter:
             dest_tz=dest.get("timezone") or "UTC",
             sched_out=parse_time(f.get("scheduled_out")),
             est_out=parse_time(f.get("estimated_out")),
-            act_out=parse_time(f.get("actual_out") or f.get("actual_off")),
+            act_out=parse_time(f.get("actual_out")),
+            act_off=parse_time(f.get("actual_off")),
             sched_in=parse_time(f.get("scheduled_in")),
             est_in=parse_time(f.get("estimated_in") or f.get("estimated_on")),
-            act_in=parse_time(f.get("actual_in") or f.get("actual_on")),
+            act_in=parse_time(f.get("actual_in")),
+            act_on=parse_time(f.get("actual_on")),
             gate_origin=f.get("gate_origin") or "",
             gate_destination=f.get("gate_destination") or "",
             terminal_origin=f.get("terminal_origin") or "",
@@ -311,4 +328,7 @@ class AeroAPIAdapter:
             divert_to=(dest.get("code_iata") or "") if diverted else "",
             source="aeroapi",
             live=True,
+            inbound_fa_flight_id=f.get("inbound_fa_flight_id") or "",
+            status_text=str(f.get("status") or ""),
+            progress_percent=progress,
         )
