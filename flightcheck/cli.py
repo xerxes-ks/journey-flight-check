@@ -28,12 +28,15 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--onward-origin", help="IATA for the onward departure airport")
     c.add_argument("--mct", type=int, default=45, help="minimum connection time in minutes")
     c.add_argument("--terminal-change", action="store_true")
+    c.add_argument("--terminal-change-min", type=int, default=20, help="extra minutes for a terminal change")
     c.add_argument("--bag-recheck", action="store_true")
+    c.add_argument("--checkin-close-min", type=int, default=45, help="bag-drop / check-in close before onward departure")
     c.add_argument("--separate-ticket", action="store_true")
     c.add_argument("--min-turn", type=int, default=None, help="override inbound min-turn minutes")
     c.add_argument("--budget", type=float, default=0.05, help="AeroAPI spend cap in USD (estimate)")
     c.add_argument("--json", action="store_true", help="print the structured result as JSON")
-    c.add_argument("--now", dest="now", help="simulation clock: local or ISO timestamp (tests / replay)")
+    c.add_argument("--now", dest="now", help="simulation clock: local or ISO (offline unless --live)")
+    c.add_argument("--live", action="store_true", help="allow AeroAPI when --now is set; default is a dry run")
     c.add_argument("--at", dest="now", help=argparse.SUPPRESS)
     return p
 
@@ -57,13 +60,17 @@ def main(argv=None) -> int:
             "origin": args.onward_origin,
             "min_connect_min": args.mct,
             "terminal_change": args.terminal_change,
+            "terminal_change_min": args.terminal_change_min,
             "bags_recheck": args.bag_recheck,
+            "checkin_close_min": args.checkin_close_min,
             "separate_ticket": args.separate_ticket,
         }
     now = parse_now(args.now) if args.now else None
     try:
         req = parse_request(payload)
-        result = check_flight(req, now=now)
+        # --now is a dry run / fixture clock. Hit AeroAPI only with an explicit --live.
+        offline = bool(args.now) and not args.live
+        result = check_flight(req, now=now, key="" if offline else None)
     except CheckError as exc:
         print(redact(exc), file=sys.stderr)
         return 2

@@ -10,8 +10,8 @@ Tickets print local times. Callers (an LLM concierge or a cron) should **never c
 
 - **Input `date`** is the departure date as printed on the ticket (the origin airport’s local calendar date). There is no timezone parameter. Optional `origin` (IATA) disambiguates duplicate flight numbers and is used to resolve timezone *before* the first AeroAPI call.
 - **Output times** are ISO-8601 strings **with the airport’s offset**, plus `tz` (IANA name) and a short `human` form such as `02:55 Sun 13 Dec (DEL time)`. Departures use the origin tz; arrivals use the destination tz. Reason strings use those local clocks, never UTC.
-- **`next_check_local`** is in the origin’s local time; **`next_check_in_minutes`** is the wait from `now`. Cancelled, diverted, and landed results are final: `final: true`, `next_check_local: null`.
-- **`summary`** is one plain sentence a chat bot can relay as-is.
+- **`next_check_local`** is in the origin’s local time; **`next_check_in_minutes`** is the wait from `now`. It is **never null unless the result is final** (cancelled, diverted, landed). Unknown / no_data before departure retries in 60 minutes, or at the time the local day could first appear in AeroAPI’s ~47h window. When `scheduled_out` is known, T is that time.
+- **`summary`** is a short paragraph a chat bot can relay as-is (human band words: on track / worth watching / at risk). Top-level `status`, `band`, and `final` duplicate the fields a cron or LLM is most likely to branch on.
 
 ### Timezones
 
@@ -24,7 +24,7 @@ The **too_early** path makes **no AeroAPI call**, so it cannot read those fields
 - **Resolved flight:** scheduled, estimated, and actual gate times (local); origin/destination; gates; terminals; baggage; aircraft type; registration; status (`scheduled` / `active` / `landed` / `cancelled` / `diverted` / `unknown` / `too_early`).
 - **Inbound aircraft:** ident and ETA when departure is within *N* hours (default 6).
 - **Delay prediction:** expected departure and arrival delay in minutes, a band (`on_track` / `watch` / `at_risk` / `unknown`), and local-time reasons. Evidence order: airline estimate, then inbound ETA + min turn, then an optional historical prior. Default min turn is **35 min**, or **60 min** for wide-body/long-haul (`B77x`/`B78x`/`A33x`/`A35x`/`A38x`, or block time > 5h). Overridable via `min_turn`.
-- **Connection risk** (optional `onward`): `min_connect_min`, `bags_recheck`, `separate_ticket`.
+- **Connection risk** (optional `onward`): `min_connect_min`, `bags_recheck`, `separate_ticket`, plus `terminal_change` / `terminal_change_min` and `checkin_close_min` (bag-drop or check-in close, used for separate tickets too). The summary mentions the connection when `onward` is given. Connection times include day and date (overnight connections).
 - **Calls and cost:** each AeroAPI request with an estimated USD cost.
 - **Errors:** structured `{code, message, http?, snippet?}` (snippet sanitized). Empty AeroAPI lists are `status: unknown`, band `unknown`, `ok: false` — not on_track.
 
@@ -35,7 +35,7 @@ The **too_early** path makes **no AeroAPI call**, so it cannot read those fields
 3. **Connection scoring** — slack = (onward departure − bag-drop close if re-checking − required) − predicted arrival.
 4. **Surfaces** — library (`flightcheck.check_flight`), CLI, HTTP `GET`/`POST /api/check`.
 
-If the ticket date’s origin-local midnight is more than **48h** out, the adapter is **not** called: status `too_early`, `next_check_local` = T−48h (T approximated as that local midnight). Query `end` is clamped to `now+47h` so AeroAPI does not 400.
+If the ticket date’s origin-local midnight is more than **48h** out, the adapter is **not** called: status `too_early`, `next_check_local` = T−48h (T approximated as that local midnight until `scheduled_out` is known). Query `end` is clamped to `now+47h` so AeroAPI does not 400. A 02:55 or 23:30 local departure can still miss that first window; the result is `unknown` with `next_check` in 60 minutes so a cron never dies.
 
 ```
 flight + ticket-local date [+ origin] [+ onward]
@@ -74,12 +74,13 @@ poll_interval(sched_dep, now, landed=False, sched_arr=None, actual_dep=None)
 
 | When | Interval |
 |---|---|
-| Further out than T−48h | do not poll (`too_early` if we have not called yet) |
+| Further out than T−48h | `too_early` / next_check at T−48h (never null) |
 | T−48h to T−6h | every 3 hours |
 | T−6h to T−3h | every hour |
-| T−3h to departure | every 15 minutes |
-| Airborne | 30 min if block time ≤ 4h, else 60 min; keys off **actual** departure when known |
-| Landed / cancelled / diverted | stop |
+| T−3h through scheduled departure, still at gate | every 15 minutes, until **actual** off |
+| Airborne | 30 min if block time ≤ 4h, else 60 min; keys off **actual** departure |
+| Landed / cancelled / diverted | stop (`final`, `next_check_local: null`) |
+| unknown / no_data before departure | 60 min, or when the local day becomes visible |
 
 ## Install and CLI
 
@@ -91,9 +92,10 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
 .venv/bin/python -m flightcheck check XX123 2026-12-10 --origin LAX --budget 0.05 --json
 .venv/bin/python -m flightcheck check XX123 2026-12-10 --onward YY456 --mct 60 --bag-recheck --separate-ticket
 .venv/bin/python -m flightcheck check XX754 2027-12-13 --origin DEL --now 2027-12-11T12:00:00Z --json
+.venv/bin/python -m flightcheck check XX754 2027-12-13 --origin DEL --now 2027-12-11T12:00:00Z --live --json
 ```
 
-`--now` is a simulation clock (local or ISO). Without `FLIGHTAWARE_AEROAPI_KEY`, there is no live lookup.
+`--now` is a simulation clock (local or ISO) and **stays offline** (dry run / fixtures) unless **`--live`** is passed explicitly. Without `FLIGHTAWARE_AEROAPI_KEY`, there is no live lookup.
 
 ## Library
 
@@ -148,6 +150,9 @@ Example output (on-time, truncated):
 ```json
 {
   "ok": true,
+  "status": "scheduled",
+  "band": "on_track",
+  "final": false,
   "summary": "XXA→XXB is on track, departing 14:00 Mon 15 Mar (XXA time).",
   "flight": {
     "ident_iata": "XX123",
@@ -199,7 +204,7 @@ Copy `.env.example` to `.env` for local experiments. `.env*` is gitignored.
 | `flightcheck/predict.py` | Delay prediction |
 | `flightcheck/connections.py` | Connection-risk scoring |
 | `flightcheck/cadence.py` | `poll_interval` |
-| `flightcheck/cli.py` | `python -m flightcheck` (`--now` for simulations) |
+| `flightcheck/cli.py` | `python -m flightcheck` (`--now` offline unless `--live`) |
 | `api/check.py` | Vercel Function |
 | `schema/check_flight.tool.json` | Tiny tool input/output JSON Schema |
 

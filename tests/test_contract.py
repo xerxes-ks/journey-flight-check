@@ -104,4 +104,9 @@ def test_tool_schema_is_tiny(schema):
     assert props == {"flight", "date", "origin", "onward"}
     assert schema["inputSchema"]["required"] == ["flight", "date"]
     onward = set(schema["inputSchema"]["properties"]["onward"]["properties"])
-    assert onward == {"flight", "date", "origin", "min_connect_min", "separate_ticket", "bags_recheck"}
+    assert onward == {
+        "flight", "date", "origin", "min_connect_min", "separate_ticket", "bags_recheck",
+        "terminal_change", "terminal_change_min", "checkin_close_min",
+    }
+    required_out = set(schema["outputSchema"]["required"])
+    assert {"status", "band", "final", "summary"}.issubset(required_out)

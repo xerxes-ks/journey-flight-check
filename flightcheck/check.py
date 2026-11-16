@@ -15,7 +15,10 @@ from .connections import assess
 from .exceptions import AeroAPIError, BudgetExceeded, CheckError
 from .model import (
     UTC,
+    BAND_HUMAN,
     TOO_EARLY_HOURS,
+    UNKNOWN_RETRY_MIN,
+    WINDOW_END_MAX_AHEAD_H,
     CheckRequest,
     CheckResult,
     Flight,
@@ -25,7 +28,7 @@ from .model import (
 )
 from .predict import predict
 from .sanitize import redact, secret_values
-from .times import local_dict, parse_now_maybe
+from .times import human_form, local_dict, parse_now_maybe
 from .turn import default_min_turn
 
 
@@ -135,8 +138,10 @@ def _local_midnight(day: dt.date, tzname: str) -> dt.datetime:
 def too_early_gate(day: dt.date, now: dt.datetime, origin: Optional[str]):
     """If origin-local midnight of the ticket date is more than 48h out, skip AeroAPI.
 
-    T is approximated as origin-local midnight of the ticket date (the exact STD is
-    unknown until we call). next_check is T-48h in that local zone.
+    Exact STD is unknown until a live lookup. T is approximated as origin-local
+    midnight of the ticket date; next_check is T−48h in that zone. After the
+    first call, an empty window retries every 60 min so a cron never stalls.
+    When STD is known, next_check prefers T from scheduled_out.
     """
     tzname = tz_for_iata(origin) if origin else "UTC"
     t = _local_midnight(day, tzname)
@@ -144,6 +149,11 @@ def too_early_gate(day: dt.date, now: dt.datetime, origin: Optional[str]):
     if now.astimezone(t.tzinfo) < t_minus:
         return t_minus, tzname
     return None, tzname
+
+
+def _visible_from(day: dt.date, tzname: str) -> dt.datetime:
+    """Earliest instant the local day's 00:00 departure could fall inside now+47h."""
+    return _local_midnight(day, tzname) - dt.timedelta(hours=WINDOW_END_MAX_AHEAD_H)
 
 
 def _skeleton(ident, date, origin, status="unknown", tzname="UTC") -> Flight:
@@ -158,63 +168,147 @@ def _skeleton(ident, date, origin, status="unknown", tzname="UTC") -> Flight:
     )
 
 
-def _summarize(flight: Flight, pred, conn=None, error=None) -> str:
+def _band_word(band: str) -> str:
+    return BAND_HUMAN.get(band, (band or "unknown").replace("_", " "))
+
+
+def _with_connection(sentence: str, conn=None, onward_ident: Optional[str] = None) -> str:
+    sentence = (sentence or "").rstrip()
+    if sentence and not sentence.endswith("."):
+        sentence += "."
+    if conn:
+        name = conn.onward_ident or onward_ident or "the onward flight"
+        sentence += f" The connection to {name} is {_band_word(conn.band)}."
+    elif onward_ident:
+        sentence += f" The connection to {onward_ident} has not been scored yet."
+    return sentence
+
+
+def _summarize(
+    flight: Flight,
+    pred,
+    conn=None,
+    error=None,
+    next_check_local=None,
+    onward_ident: Optional[str] = None,
+    ticket_date: Optional[str] = None,
+) -> str:
     name = flight.ident_iata or flight.ident
     route = f"{flight.origin}→{flight.destination}" if flight.origin and flight.destination else name
-    if error and error.get("code") == "no_data":
-        return f"No live data for {name} on {flight.origin or 'the requested date'}."
-    if error:
-        return error.get("message") or f"Could not look up {name}."
+    band_word = _band_word(pred.band)
+
     if flight.status == "too_early":
-        return (
-            f"{name} on the ticket date is more than 48 hours out; "
-            f"live status is not queried yet."
-        )
+        open_at = (next_check_local or {}).get("human")
+        msg = f"{name} is more than 48 hours from departure."
+        if open_at:
+            msg += f" Live checks open {open_at}."
+        else:
+            msg += " Live status is not queried yet."
+        return _with_connection(msg, conn, onward_ident)
+
+    if error and error.get("code") == "no_data":
+        when = ticket_date or flight.origin or "the requested date"
+        return _with_connection(f"No live data for {name} on {when}.", conn, onward_ident)
+    if error and flight.status in ("unknown",):
+        return _with_connection(error.get("message") or f"Could not look up {name}.", conn, onward_ident)
+    if error and not flight.live:
+        return _with_connection(error.get("message") or f"Could not look up {name}.", conn, onward_ident)
+
     if flight.status == "unknown":
-        return f"No live data for {name}."
+        return _with_connection(f"No live data for {name}.", conn, onward_ident)
     if flight.cancelled:
-        return f"{name} has been cancelled."
+        return _with_connection(f"{name} has been cancelled.", conn, onward_ident)
     if flight.diverted:
         dest = flight.divert_to or "another airport"
-        return f"{name} has been diverted to {dest}."
-    if flight.status == "landed" and pred.reasons:
-        return f"{name} {pred.reasons[0]}."
-    if conn and conn.band == "at_risk":
-        return f"{name} connection is at risk. {conn.explain}"
+        return _with_connection(f"{name} has been diverted to {dest}.", conn, onward_ident)
+
+    if flight.status == "landed":
+        when = (
+            human_form(flight.act_in, flight.destination, flight.dest_tz)
+            if flight.act_in
+            else "on arrival"
+        )
+        bits = []
+        if flight.terminal_destination:
+            bits.append(f"terminal {flight.terminal_destination}")
+        if flight.gate_destination:
+            bits.append(f"gate {flight.gate_destination}")
+        if flight.baggage_claim:
+            bits.append(f"baggage belt {flight.baggage_claim}")
+        at = f" at {', '.join(bits)}" if bits else ""
+        return _with_connection(f"{name} landed {when}{at}.", conn, onward_ident)
+
+    if flight.status == "active" or (flight.act_out and not flight.act_in):
+        land = pred.pred_in or flight.est_in
+        extra = ""
+        if land:
+            extra = f", estimated arrival {human_form(land, flight.destination, flight.dest_tz)}"
+        return _with_connection(f"{name} is {band_word}, in the air{extra}.", conn, onward_ident)
+
     if pred.band == "on_track":
         when = ""
         if pred.pred_out:
-            from .times import human_form
             when = f", departing {human_form(pred.pred_out, flight.origin, flight.origin_tz)}"
-        return f"{route} is on track{when}."
-    if pred.reasons:
-        delay = f" expected departure delay {pred.dep_delay_min} min." if pred.dep_delay_min else ""
-        return f"{name} is {pred.band.replace('_', ' ')}: {pred.reasons[0]}{delay}"
-    return f"{name} status is {flight.status}."
+        return _with_connection(f"{route} is on track{when}.", conn, onward_ident)
+
+    reason = (pred.reasons or [""])[0].rstrip(".")
+    if reason:
+        reason = reason[0].upper() + reason[1:]
+    msg = f"{name} is {band_word}."
+    if reason:
+        msg += f" {reason}."
+    if pred.dep_delay_min:
+        msg += f" Expected departure delay {pred.dep_delay_min} min."
+    return _with_connection(msg, conn, onward_ident)
 
 
-def _next_check(flight: Flight, pred, now: dt.datetime, too_early_at=None):
-    origin = flight.origin
-    tzname = flight.origin_tz or "UTC"
+def _pack_next(when: dt.datetime, now: dt.datetime, tzname: str, origin: str):
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=UTC)
+    delta = when - now.astimezone(when.tzinfo)
+    minutes = int(delta.total_seconds() // 60)
+    if minutes < 1:
+        minutes = 1
+        when = now.astimezone(when.tzinfo) + dt.timedelta(minutes=1)
+    return local_dict(when.astimezone(UTC), tzname, origin), minutes
+
+
+def _next_check(
+    flight: Flight,
+    pred,
+    now: dt.datetime,
+    *,
+    too_early_at=None,
+    ticket_day: Optional[dt.date] = None,
+):
+    origin = flight.origin or ""
+    tzname = flight.origin_tz or (tz_for_iata(origin) if origin else "UTC") or "UTC"
     if pred.final or flight.status in ("cancelled", "diverted", "landed"):
         return None, None
     if too_early_at is not None:
-        delta = too_early_at - now.astimezone(too_early_at.tzinfo)
-        minutes = max(0, int(delta.total_seconds() // 60))
-        return local_dict(too_early_at.astimezone(UTC), tzname, origin), minutes
-    if not flight.sched_out:
-        return None, None
-    interval = poll_interval(
-        flight.sched_out,
-        now,
-        landed=pred.final,
-        sched_arr=flight.sched_in,
-        actual_dep=flight.act_out,
-    )
-    if interval is None:
-        return None, None
-    nxt = now + dt.timedelta(minutes=interval)
-    return local_dict(nxt, tzname, origin), interval
+        return _pack_next(too_early_at, now, tzname, origin)
+    if flight.sched_out:
+        interval = poll_interval(
+            flight.sched_out,
+            now,
+            landed=pred.final,
+            sched_arr=flight.sched_in,
+            actual_dep=flight.act_out,
+        )
+        if interval is None:
+            t_minus = flight.sched_out - dt.timedelta(hours=TOO_EARLY_HOURS)
+            if now.astimezone(flight.sched_out.tzinfo) < t_minus:
+                return _pack_next(t_minus, now, tzname, origin)
+            return _pack_next(now + dt.timedelta(minutes=UNKNOWN_RETRY_MIN), now, tzname, origin)
+        return _pack_next(now + dt.timedelta(minutes=interval), now, tzname, origin)
+    # unknown / no_data and no STD yet: retry in 60 min, or when the local day
+    # could first fall inside AeroAPI's ~47h window.
+    nxt = now + dt.timedelta(minutes=UNKNOWN_RETRY_MIN)
+    if ticket_day is not None:
+        visible = _visible_from(ticket_day, tzname)
+        if now.astimezone(visible.tzinfo) < visible:
+            nxt = visible
+    return _pack_next(nxt, now, tzname, origin)
 
 
 def check_flight(req: CheckRequest | dict, *, fetch=None, adapter=None, now=None, key=None) -> CheckResult:
@@ -228,11 +322,12 @@ def check_flight(req: CheckRequest | dict, *, fetch=None, adapter=None, now=None
     origin = req.origin
     tzname = tz_for_iata(origin) if origin else "UTC"
 
+    onward_ident = req.onward.ident if req.onward else None
     gate, tzname = too_early_gate(day, now, origin)
     if gate is not None:
         flight = _skeleton(ident, req.date, origin, status="too_early", tzname=tzname)
         pred = predict(flight)
-        nxt, minutes = _next_check(flight, pred, now, too_early_at=gate)
+        nxt, minutes = _next_check(flight, pred, now, too_early_at=gate, ticket_day=day)
         return CheckResult(
             flight=flight,
             inbound=None,
@@ -241,7 +336,12 @@ def check_flight(req: CheckRequest | dict, *, fetch=None, adapter=None, now=None
             calls=[],
             cost_usd_est=0.0,
             ok=True,
-            summary=_summarize(flight, pred),
+            summary=_summarize(
+                flight, pred,
+                next_check_local=nxt,
+                onward_ident=onward_ident,
+                ticket_date=req.date,
+            ),
             next_check_local=nxt,
             next_check_in_minutes=minutes,
         )
@@ -307,7 +407,7 @@ def check_flight(req: CheckRequest | dict, *, fetch=None, adapter=None, now=None
             params = call.get("params") or {}
             call["params"] = {k: redact(v, *secrets) for k, v in params.items()}
 
-    nxt, minutes = _next_check(flight, pred, now)
+    nxt, minutes = _next_check(flight, pred, now, ticket_day=day)
     ok = error is None and flight.status not in ("unknown",)
     return CheckResult(
         flight=flight,
@@ -317,7 +417,12 @@ def check_flight(req: CheckRequest | dict, *, fetch=None, adapter=None, now=None
         calls=calls,
         cost_usd_est=round(spent, 4),
         ok=ok,
-        summary=_summarize(flight, pred, conn, error),
+        summary=_summarize(
+            flight, pred, conn, error,
+            next_check_local=nxt,
+            onward_ident=onward_ident,
+            ticket_date=req.date,
+        ),
         next_check_local=nxt,
         next_check_in_minutes=minutes,
         error=error,

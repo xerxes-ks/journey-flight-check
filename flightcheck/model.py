@@ -28,6 +28,13 @@ DEFAULT_COST_PER_CALL = 0.005
 TOO_EARLY_HOURS = 48
 WINDOW_END_MAX_AHEAD_H = 47
 WINDOW_START_MAX_PAST_DAYS = 10
+UNKNOWN_RETRY_MIN = 60
+BAND_HUMAN = {
+    "on_track": "on track",
+    "watch": "worth watching",
+    "at_risk": "at risk",
+    "unknown": "unknown",
+}
 
 
 def worst(*bands: str) -> str:
@@ -248,9 +255,26 @@ class CheckResult:
     next_check_in_minutes: Optional[int] = None
     error: Optional[dict] = None
 
+    @property
+    def status(self) -> str:
+        return self.flight.status
+
+    @property
+    def band(self) -> str:
+        if self.connection:
+            return worst(self.prediction.band, self.connection.band)
+        return self.prediction.band
+
+    @property
+    def final(self) -> bool:
+        return bool(self.prediction.final)
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "ok": self.ok,
+            "status": self.status,
+            "band": self.band,
+            "final": self.final,
             "summary": self.summary,
             "flight": self.flight.to_dict(),
             "inbound": self.inbound.to_dict() if self.inbound else None,

@@ -48,6 +48,30 @@ def aeroapi_window_error(params: dict, now: dt.datetime) -> str | None:
     return None
 
 
+def _filter_flights_to_window(body: dict, params: dict) -> dict:
+    """AeroAPI only returns instances whose scheduled_out falls in [start, end)."""
+    if not isinstance(body, dict) or "flights" not in body:
+        return body
+    start = parse_time((params or {}).get("start"))
+    end = parse_time((params or {}).get("end"))
+    if not start and not end:
+        return body
+    kept = []
+    for f in body.get("flights") or []:
+        t = parse_time((f or {}).get("scheduled_out") or (f or {}).get("scheduled_off"))
+        if t is None:
+            kept.append(f)
+            continue
+        if start and t < start:
+            continue
+        if end and t >= end:
+            continue
+        kept.append(f)
+    out = dict(body)
+    out["flights"] = kept
+    return out
+
+
 def make_fetch(mapping: dict[str, tuple[int, dict]], now=NEAR_DEP):
     """Exact path match, then longest prefix. Tests never hit the network."""
     now_dt = parse_time(now) if not isinstance(now, dt.datetime) else now
@@ -56,14 +80,19 @@ def make_fetch(mapping: dict[str, tuple[int, dict]], now=NEAR_DEP):
         bad = aeroapi_window_error(params or {}, now_dt)
         if bad:
             return 400, {"title": "Invalid request", "detail": bad, "status": 400}
+        body = None
+        status = None
         if path in mapping:
             status, body = mapping[path]
-            return status, deepcopy(body)
-        for prefix in sorted(mapping, key=len, reverse=True):
-            if path.startswith(prefix):
-                status, body = mapping[prefix]
-                return status, deepcopy(body)
-        return 404, {"title": "Not Found"}
+        else:
+            for prefix in sorted(mapping, key=len, reverse=True):
+                if path.startswith(prefix):
+                    status, body = mapping[prefix]
+                    break
+        if body is None:
+            return 404, {"title": "Not Found"}
+        body = deepcopy(body)
+        return status, _filter_flights_to_window(body, params or {})
 
     return fetch
 

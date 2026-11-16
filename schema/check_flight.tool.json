@@ -38,7 +38,15 @@
           "origin": { "type": "string" },
           "min_connect_min": { "type": "integer", "minimum": 0, "default": 45 },
           "separate_ticket": { "type": "boolean", "default": false },
-          "bags_recheck": { "type": "boolean", "default": false }
+          "bags_recheck": { "type": "boolean", "default": false },
+          "terminal_change": { "type": "boolean", "default": false },
+          "terminal_change_min": { "type": "integer", "minimum": 0, "default": 20 },
+          "checkin_close_min": {
+            "type": "integer",
+            "minimum": 0,
+            "default": 45,
+            "description": "Minutes before onward departure that bag-drop or check-in closes (separate tickets / bag recheck)."
+          }
         }
       }
     }
@@ -47,11 +55,18 @@
     "type": "object",
     "additionalProperties": false,
     "required": [
-      "ok", "summary", "flight", "inbound", "prediction", "connection",
-      "next_check_local", "next_check_in_minutes", "calls", "cost_usd_est", "error"
+      "ok", "status", "band", "final", "summary", "flight", "inbound",
+      "prediction", "connection", "next_check_local", "next_check_in_minutes",
+      "calls", "cost_usd_est", "error"
     ],
     "properties": {
       "ok": { "type": "boolean" },
+      "status": {
+        "type": "string",
+        "enum": ["scheduled", "active", "landed", "cancelled", "diverted", "unknown", "too_early"]
+      },
+      "band": { "type": "string", "enum": ["on_track", "watch", "at_risk", "unknown"] },
+      "final": { "type": "boolean" },
       "summary": { "type": "string", "description": "One plain sentence a chat bot can relay as-is." },
       "flight": { "$ref": "#/$defs/flight" },
       "inbound": {

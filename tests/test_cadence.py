@@ -39,12 +39,18 @@ def test_fifteen_until_departure():
 
 def test_airborne_short_haul_is_30():
     dep, now, arr = t(-1, block_hours=3)
-    assert poll_interval(dep, now, False, arr) == 30
+    assert poll_interval(dep, now, False, arr, actual_dep=dep) == 30
 
 
 def test_airborne_long_haul_is_60():
     dep, now, arr = t(-1, block_hours=8)
-    assert poll_interval(dep, now, False, arr) == 60
+    assert poll_interval(dep, now, False, arr, actual_dep=dep) == 60
+
+
+def test_at_gate_after_std_stays_15_until_actual_off():
+    dep, now, arr = t(-0.5, block_hours=3)
+    assert poll_interval(dep, now, False, arr) == 15
+    assert poll_interval(dep, now, False, arr, actual_dep=dep) == 30
 
 
 def test_stop_at_landing():

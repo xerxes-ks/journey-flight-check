@@ -8,7 +8,7 @@ from __future__ import annotations
 import datetime as dt
 
 from .model import ConnectionRisk, Flight, OnwardRequest, Prediction, mins
-from .times import clock
+from .times import human_form
 
 
 def assess(
@@ -19,7 +19,8 @@ def assess(
 ) -> ConnectionRisk:
     protected = not spec.separate_ticket
     required = spec.min_connection_min + (spec.terminal_change_min if spec.terminal_change else 0)
-    close = spec.checkin_close_min if spec.bag_recheck else 0
+    # Bag-drop / check-in close applies when re-checking bags or on a separate ticket.
+    close = spec.checkin_close_min if (spec.bag_recheck or spec.separate_ticket) else 0
     onward_name = onward.ident_iata or onward.ident
     arr_tz, arr_iata = inbound.dest_tz, inbound.destination
     dep_tz, dep_iata = onward.origin_tz, onward.origin
@@ -61,14 +62,14 @@ def assess(
     else:
         band = "on_track"
 
-    parts = [f"{onward_name} leaves {clock(next_dep, dep_tz, dep_iata)}"]
+    parts = [f"{onward_name} leaves {human_form(next_dep, dep_iata, dep_tz) if next_dep else 'unknown'}"]
     if later:
         parts.append(f" (airline shows +{later} min)")
     parts.append(f"; you need about {required} min")
     if spec.terminal_change:
-        parts.append(" incl. a terminal change")
+        parts.append(f" incl. a terminal change ({spec.terminal_change_min} min)")
     if close:
-        parts.append(f" and bag drop closes {close} min before")
+        parts.append(f" and check-in/bag-drop closes {close} min before")
     why = "".join(parts)
 
     if broken:
@@ -79,8 +80,8 @@ def assess(
     if latest and pred.pred_in:
         spare = f"{'+' if slack >= 0 else ''}{slack} min spare"
         explain = (
-            f"{why}. Latest workable arrival {clock(latest, arr_tz, arr_iata)}; "
-            f"predicted {clock(pred.pred_in, arr_tz, arr_iata)} ({spare})."
+            f"{why}. Latest workable arrival {human_form(latest, arr_iata, arr_tz)}; "
+            f"predicted {human_form(pred.pred_in, arr_iata, arr_tz)} ({spare})."
         )
     else:
         explain = f"{why}. Not enough schedule data to compute slack."

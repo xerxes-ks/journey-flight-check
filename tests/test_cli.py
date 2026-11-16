@@ -36,3 +36,55 @@ def test_cli_without_key_is_unknown():
     assert data["flight"]["status"] in ("unknown", "too_early")
     assert data["prediction"]["band"] == "unknown"
     assert "FLIGHTAWARE_AEROAPI_KEY" in proc.stderr
+
+
+def test_cli_help_mentions_live():
+    out = subprocess.run(
+        [sys.executable, "-m", "flightcheck", "check", "--help"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert "--live" in out.stdout
+    assert "--now" in out.stdout
+
+
+def test_cli_now_stays_offline_without_live(monkeypatch, capsys):
+    monkeypatch.setenv("FLIGHTAWARE_AEROAPI_KEY", "fake-live-key")
+    hits = []
+
+    def boom(self, path, params):
+        hits.append(path)
+        raise AssertionError("network should not run")
+
+    monkeypatch.setattr("flightcheck.adapters.aeroapi.AeroAPIAdapter._http", boom)
+    from flightcheck.cli import main
+
+    rc = main(["check", "XX123", "2027-03-15", "--now", "2027-03-15T16:30:00Z", "--json"])
+    assert rc == 0
+    assert hits == []
+    data = json.loads(capsys.readouterr().out)
+    assert data["flight"]["status"] in ("unknown", "too_early")
+    assert data["next_check_local"] is not None
+
+
+def test_cli_now_with_live_calls_adapter(monkeypatch, capsys):
+    monkeypatch.setenv("FLIGHTAWARE_AEROAPI_KEY", "fake-live-key")
+    hits = []
+
+    def fake_http(self, path, params):
+        hits.append(path)
+        return 200, {"flights": []}
+
+    monkeypatch.setattr("flightcheck.adapters.aeroapi.AeroAPIAdapter._http", fake_http)
+    from flightcheck.cli import main
+
+    rc = main([
+        "check", "XX123", "2027-03-15",
+        "--now", "2027-03-15T16:30:00Z", "--live", "--json",
+    ])
+    assert rc == 0
+    assert hits
+    data = json.loads(capsys.readouterr().out)
+    assert data["flight"]["status"] in ("unknown", "too_early")

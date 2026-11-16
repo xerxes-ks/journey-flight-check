@@ -55,6 +55,11 @@ def test_on_time_connection_protected():
     assert r.connection.slack_min == 45
     assert r.connection.required_min == 45
     assert "Separate tickets" not in r.connection.explain
+    assert "connection to yy456" in r.summary.lower()
+    assert "on track" in r.summary.lower()
+    assert r.status == "scheduled"
+    assert r.band == "on_track"
+    assert r.final is False
 
 
 def test_inbound_late_predicts_from_inbound():
@@ -137,6 +142,11 @@ def test_empty_response_is_unknown_not_on_track():
     assert r.ok is False
     assert r.error and r.error["code"] == "no_data"
     assert r.inbound is None
+    assert r.next_check_local is not None
+    assert r.next_check_in_minutes == 60
+    assert r.status == "unknown"
+    assert r.band == "unknown"
+    assert r.final is False
 
 
 def test_404_is_not_found():

@@ -35,7 +35,12 @@ def as_local(t: Optional[dt.datetime], tzname: Optional[str]) -> Optional[dt.dat
 
 def human_form(t: dt.datetime, airport: str = "", tzname: str = "") -> str:
     loc = as_local(t, tzname) or t
-    label = f" ({airport} time)" if airport else (f" ({tzname} time)" if tzname and tzname != "UTC" else "")
+    if airport:
+        label = f" ({airport} time)"
+    elif tzname and tzname != "UTC":
+        label = f" ({tzname} time)"
+    else:
+        label = " (UTC)"
     return (
         f"{loc:%H:%M} {DOW[loc.weekday()]} {loc.day} {MON[loc.month - 1]}"
         f"{label}"
