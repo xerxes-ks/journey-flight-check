@@ -187,7 +187,7 @@ Example output (on-time, truncated):
 
 1. Create a Vercel project from this repo. Connect it to **`main`** after this PR is merged (the default branch currently has no function).
 2. Set `FLIGHTAWARE_AEROAPI_KEY` and `FLIGHTCHECK_TOKEN`.
-3. Deploy. `vercel.json` sets `maxDuration` 30s. Upstream AeroAPI calls time out at **8s** so a client with a ~10s timeout can treat a hang as retryable.
+3. Deploy. `pyproject.toml` sets `[tool.vercel] entrypoint = "api.check:handler"`. `vercel.json` sets `maxDuration` 30s. Upstream AeroAPI calls time out at **8s** so a client with a ~10s timeout can treat a hang as retryable.
 
 Auth failures are 401. Missing `flight`/`date` is 400. Budget exceeded is 402. Upstream AeroAPI errors are **structured JSON** (`error.code` / `error.retryable` / `error.snippet`), not a bare 502.
 

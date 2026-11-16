@@ -1,4 +1,5 @@
 import json
+import os
 import threading
 from http.server import HTTPServer
 
@@ -166,6 +167,17 @@ def test_upstream_error_is_structured_json_not_bare_502(handler_env, monkeypatch
     assert "503" in payload["error"]["message"] or payload["error"].get("http") == 503
     # Not a bare 502 with a string body.
     assert status != 502 or isinstance(payload.get("error"), dict)
+
+
+def test_vercel_entrypoint_is_declared():
+    import tomllib
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(root, "pyproject.toml"), "rb") as fh:
+        data = tomllib.load(fh)
+    assert data["tool"]["vercel"]["entrypoint"] == "api.check:handler"
+    import api.check as mod
+    assert hasattr(mod, "handler")
 
 
 def test_http_server_roundtrip(handler_env):
