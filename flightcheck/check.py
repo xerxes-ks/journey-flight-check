@@ -12,7 +12,7 @@ from .adapters.schedule import ScheduleAdapter
 from .airports import tz_for_iata
 from .cadence import poll_interval
 from .connections import assess
-from .exceptions import AeroAPIError, BudgetExceeded, CheckError
+from .exceptions import AeroAPIError, BudgetExceeded, CheckError, error_dict
 from .model import (
     UTC,
     BAND_HUMAN,
@@ -220,7 +220,7 @@ def _summarize(
             msg += " Live status is not queried yet."
         return _with_connection(msg, conn, onward_ident)
 
-    if error and error.get("code") == "no_data":
+    if error and error.get("code") in ("no_data", "flight_not_found"):
         when = ticket_date or flight.origin or "the requested date"
         return _with_connection(f"No live data for {name} on {when}.", conn, onward_ident)
     if error and flight.status in ("unknown",):
@@ -358,6 +358,7 @@ def check_flight(req: CheckRequest | dict, *, fetch=None, adapter=None, now=None
             ),
             next_check_local=nxt,
             next_check_in_minutes=minutes,
+            checked_at=now.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         )
 
     adapter = adapter or make_adapter(req, fetch=fetch, key=key)
@@ -388,10 +389,10 @@ def check_flight(req: CheckRequest | dict, *, fetch=None, adapter=None, now=None
     if flight is None:
         flight = _skeleton(ident, req.date, origin, status="unknown", tzname=tzname)
         if error is None:
-            error = {
-                "code": "no_data",
-                "message": f"AeroAPI returned no flights for {ident} on {req.date}",
-            }
+            error = error_dict(
+                "flight_not_found",
+                f"AeroAPI returned no flights for {ident} on {req.date}",
+            )
 
     turn = req.min_turn
     if turn is None:
@@ -439,5 +440,6 @@ def check_flight(req: CheckRequest | dict, *, fetch=None, adapter=None, now=None
         ),
         next_check_local=nxt,
         next_check_in_minutes=minutes,
+        checked_at=now.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         error=error,
     )

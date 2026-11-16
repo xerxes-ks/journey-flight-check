@@ -2,15 +2,46 @@
 
 from __future__ import annotations
 
+# Codes a cron can branch on. 429/5xx/timeouts are retryable; 4xx (except 429)
+# and empty results are not — follow next_poll_min instead.
+RETRYABLE_CODES = frozenset({
+    "rate_limited",
+    "upstream_rate_limited",
+    "upstream_error",
+    "upstream_unavailable",
+    "error",
+})
+
+
+def retryable_for(code: str) -> bool:
+    return (code or "") in RETRYABLE_CODES
+
 
 def error_code_for_http(status: int) -> str:
+    code = int(status or 0)
+    if code in (0, 408, 504):
+        return "upstream_unavailable"
+    if code == 429:
+        return "rate_limited"
     return {
         400: "bad_request",
         401: "unauthorized",
         403: "forbidden",
         404: "not_found",
-        429: "rate_limited",
-    }.get(int(status or 0), "upstream_error")
+    }.get(code, "upstream_error")
+
+
+def error_dict(code: str, message: str, http: int = 0, snippet: str = "") -> dict:
+    out = {
+        "code": code,
+        "message": str(message),
+        "retryable": retryable_for(code),
+    }
+    if http:
+        out["http"] = http
+    if snippet:
+        out["snippet"] = snippet
+    return out
 
 
 class CheckError(RuntimeError):
@@ -23,12 +54,7 @@ class CheckError(RuntimeError):
         super().__init__(message)
 
     def to_dict(self) -> dict:
-        out = {"code": self.code, "message": str(self)}
-        if self.http_status:
-            out["http"] = self.http_status
-        if self.snippet:
-            out["snippet"] = self.snippet
-        return out
+        return error_dict(self.code, str(self), self.http_status, self.snippet)
 
 
 class BudgetExceeded(CheckError):

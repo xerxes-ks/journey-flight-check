@@ -18,7 +18,7 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 from flightcheck import check as flightcheck_svc  # noqa: E402
-from flightcheck.exceptions import BudgetExceeded, CheckError  # noqa: E402
+from flightcheck.exceptions import BudgetExceeded, CheckError, error_dict  # noqa: E402
 from flightcheck.sanitize import redact  # noqa: E402
 
 HTTP_BUDGET_CAP = 0.50
@@ -51,7 +51,7 @@ def handle(method: str, headers: dict, query: dict, body: dict | None):
     """Pure handler used by the Vercel class and by tests. Returns (status, payload)."""
     auth = headers.get("Authorization") or headers.get("authorization")
     if not _authorized(auth):
-        return 401, {"ok": False, "error": {"code": "unauthorized", "message": "unauthorized"}}
+        return 401, {"ok": False, "error": error_dict("unauthorized", "unauthorized")}
     data = dict(query or {})
     if method == "POST":
         if body:
@@ -63,25 +63,24 @@ def handle(method: str, headers: dict, query: dict, body: dict | None):
             elif body.get("onward"):
                 data["onward"] = body["onward"]
     if not (data.get("flight") or data.get("ident")) or not data.get("date"):
-        return 400, {"ok": False, "error": {"code": "bad_request", "message": "flight and date are required"}}
+        return 400, {"ok": False, "error": error_dict("bad_request", "flight and date are required")}
     try:
         req = flightcheck_svc.parse_request(data)
     except (ValueError, TypeError, KeyError) as exc:
-        return 400, {"ok": False, "error": {"code": "bad_request", "message": redact(exc)}}
+        return 400, {"ok": False, "error": error_dict("bad_request", redact(exc))}
     req.budget_usd = min(float(req.budget_usd), HTTP_BUDGET_CAP)
     try:
         result = flightcheck_svc.check_flight(req)
     except BudgetExceeded as exc:
-        return 402, {
-            "ok": False,
-            "error": {"code": "budget_exceeded", "message": redact(exc), "budget_usd": req.budget_usd},
-        }
+        err = error_dict("budget_exceeded", redact(exc))
+        err["budget_usd"] = req.budget_usd
+        return 402, {"ok": False, "error": err}
     except CheckError as exc:
         payload = {"ok": False, "error": exc.to_dict()}
         payload["error"]["message"] = redact(exc)
         return ERROR_HTTP.get(exc.code, 200), payload
     except Exception as exc:
-        return 200, {"ok": False, "error": {"code": "upstream_error", "message": redact(exc)}}
+        return 200, {"ok": False, "error": error_dict("upstream_error", redact(exc))}
     payload = result.to_dict()
     http = 200
     if result.error and result.error.get("code") in ERROR_HTTP:
@@ -121,7 +120,7 @@ class handler(BaseHTTPRequestHandler):
     def do_POST(self):
         body = self._read_json()
         if body is None:
-            self._send(400, {"ok": False, "error": {"code": "bad_request", "message": "invalid JSON"}})
+            self._send(400, {"ok": False, "error": error_dict("bad_request", "invalid JSON")})
             return
         query = _parse_query(self.path)
         status, payload = handle("POST", dict(self.headers), query, body)

@@ -253,6 +253,7 @@ class CheckResult:
     summary: str = ""
     next_check_local: Optional[dict] = None
     next_check_in_minutes: Optional[int] = None
+    checked_at: str = ""
     error: Optional[dict] = None
 
     @property
@@ -280,8 +281,10 @@ class CheckResult:
             "inbound": self.inbound.to_dict() if self.inbound else None,
             "prediction": self.prediction.to_dict(),
             "connection": self.connection.to_dict() if self.connection else None,
+            "checked_at": self.checked_at,
             "next_check_local": self.next_check_local,
             "next_check_in_minutes": self.next_check_in_minutes,
+            "next_poll_min": self.next_check_in_minutes,
             "calls": [c.to_dict() if hasattr(c, "to_dict") else c for c in self.calls],
             "cost_usd_est": self.cost_usd_est,
             "error": self.error,

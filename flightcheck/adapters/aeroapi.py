@@ -21,6 +21,9 @@ from typing import Optional
 from zoneinfo import ZoneInfo
 
 from ..exceptions import AeroAPIError, BudgetExceeded
+
+# Fail-fast so a caller with a ~10s timeout can treat a hang as retryable.
+UPSTREAM_TIMEOUT_S = 8
 from ..model import (
     DEFAULT_COST_PER_CALL,
     DEFAULT_INBOUND_WINDOW_H,
@@ -110,7 +113,7 @@ class AeroAPIAdapter:
             headers={"x-apikey": self.key, "Accept": "application/json"},
         )
         try:
-            with urllib.request.urlopen(req, timeout=20) as resp:
+            with urllib.request.urlopen(req, timeout=UPSTREAM_TIMEOUT_S) as resp:
                 return resp.status, json.loads(resp.read().decode())
         except urllib.error.HTTPError as exc:
             raw = b""

@@ -109,4 +109,48 @@ def test_tool_schema_is_tiny(schema):
         "terminal_change", "terminal_change_min", "checkin_close_min",
     }
     required_out = set(schema["outputSchema"]["required"])
-    assert {"status", "band", "final", "summary"}.issubset(required_out)
+    assert {"status", "band", "final", "summary", "checked_at", "next_poll_min"}.issubset(required_out)
+    err_req = set(schema["$defs"]["error"]["required"])
+    assert {"code", "message", "retryable"}.issubset(err_req)
+    assert "flight_not_found" in schema["$defs"]["error"]["properties"]["code"]["enum"]
+
+
+def test_next_poll_min_aliases_minutes(schema):
+    result = check_flight(
+        {"flight": "XX123", "date": "2027-03-15", "origin": "XXA"},
+        fetch=scenario_fetch(),
+        now=parse_time(NEAR_DEP),
+    )
+    data = result.to_dict()
+    assert data["next_poll_min"] == data["next_check_in_minutes"]
+    assert data["next_poll_min"] == 15
+    assert data["checked_at"] == NEAR_DEP
+    validator(schema).validate(data)
+
+
+def test_cancelled_next_poll_min_is_null(schema):
+    result = check_flight(
+        {"flight": "XX123", "date": "2027-03-15"},
+        fetch=scenario_fetch(flight="xx123-cancelled.json"),
+        now=parse_time(NEAR_DEP),
+    )
+    data = result.to_dict()
+    assert data["final"] is True
+    assert data["next_poll_min"] is None
+    validator(schema).validate(data)
+
+
+def test_not_found_is_not_on_track(schema):
+    result = check_flight(
+        {"flight": "XX123", "date": "2027-03-15"},
+        fetch=make_fetch({"/flights/": (200, load_fx("empty.json"))}),
+        now=parse_time(NEAR_DEP),
+    )
+    data = result.to_dict()
+    assert data["ok"] is False
+    assert data["status"] == "unknown"
+    assert data["band"] == "unknown"
+    assert data["error"]["code"] == "flight_not_found"
+    assert data["error"]["retryable"] is False
+    assert data["next_poll_min"] is not None
+    validator(schema).validate(data)

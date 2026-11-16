@@ -56,6 +56,9 @@ def test_key_never_leaks_from_check_flight_result(monkeypatch):
     blob = json.dumps(r.to_dict())
     assert KEY not in blob
     assert "x-apikey" not in blob.lower()
+    for call in r.to_dict()["calls"]:
+        assert KEY not in json.dumps(call.get("params") or {})
+        assert "apikey" not in json.dumps(call.get("params") or {}).lower()
 
 
 def test_key_never_leaks_when_fetch_raises(monkeypatch):

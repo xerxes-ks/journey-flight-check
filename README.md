@@ -10,7 +10,8 @@ Tickets print local times. Callers (an LLM concierge or a cron) should **never c
 
 - **Input `date`** is the departure date as printed on the ticket (the origin airport’s local calendar date). There is no timezone parameter. Optional `origin` (IATA) disambiguates duplicate flight numbers and is used to resolve timezone *before* the first AeroAPI call.
 - **Output times** are ISO-8601 strings **with the airport’s offset**, plus `tz` (IANA name) and a short `human` form such as `02:55 Sun 13 Dec (DEL time)`. Departures use the origin tz; arrivals use the destination tz. Reason strings use those local clocks, never UTC.
-- **`next_check_local`** is in the origin’s local time; **`next_check_in_minutes`** is the wait from `now`. It is **never null unless the result is final** (cancelled, diverted, landed). Unknown / no_data before departure retries in 60 minutes, or at the time the local day could first appear in AeroAPI’s ~47h window. When `scheduled_out` is known, T is that time.
+- **`checked_at`** is the UTC time of this check (ISO with `Z`). Store it with the result to judge freshness.
+- **`next_check_local`** is in the origin’s local time; **`next_check_in_minutes`** / **`next_poll_min`** (same integer) is the wait from `now`. Null means do not poll again (landed, cancelled, diverted). `too_early` returns minutes until the flight can become visible — not null — so a TypeScript cron does not need a second copy of the cadence table.
 - **`summary`** is a short paragraph a chat bot can relay as-is (human band words: on track / worth watching / at risk). Top-level `status`, `band`, and `final` duplicate the fields a cron or LLM is most likely to branch on.
 
 ### Timezones
@@ -26,7 +27,7 @@ The **too_early** path makes **no AeroAPI call**, so it cannot read those fields
 - **Delay prediction:** expected departure and arrival delay in minutes, a band (`on_track` / `watch` / `at_risk` / `unknown`), and local-time reasons. Evidence order: airline estimate, then inbound ETA + min turn, then an optional historical prior. Default min turn is **35 min**, or **60 min** for wide-body/long-haul (`B77x`/`B78x`/`A33x`/`A35x`/`A38x`, or block time > 5h). Overridable via `min_turn`.
 - **Connection risk** (optional `onward`): `min_connect_min`, `bags_recheck`, `separate_ticket`, plus `terminal_change` / `terminal_change_min` and `checkin_close_min` (bag-drop or check-in close, used for separate tickets too). The summary mentions the connection when `onward` is given. Connection times include day and date (overnight connections).
 - **Calls and cost:** each AeroAPI request with an estimated USD cost.
-- **Errors:** structured `{code, message, http?, snippet?}` (snippet sanitized). Empty AeroAPI lists are `status: unknown`, band `unknown`, `ok: false` — not on_track.
+- **Errors:** structured `{code, message, retryable, http?, snippet?}` (snippet sanitized). Empty AeroAPI lists and unknown flights are **not** on_track: HTTP 200, `ok: false`, `status: unknown`, `prediction.band: unknown`, `error.code: flight_not_found`, `retryable: false`. AeroAPI HTTP 404 is `not_found`. 429 is `rate_limited` (`retryable: true`). 5xx/timeouts are `upstream_error` (`retryable: true`). The HTTP route never returns a bare 502.
 
 ## Architecture
 
@@ -58,11 +59,11 @@ flight + ticket-local date [+ origin] [+ onward]
 
 The instance is chosen by the **origin-local** calendar date of `scheduled_out`. UTC date is used only when the origin tz is unknown.
 
-API only; this tool does not scrape FlightAware’s website. The key is read from **`FLIGHTAWARE_AEROAPI_KEY`** (`x-apikey`). It never appears in logs, call records, or HTTP responses. Upstream error bodies are kept as a short **sanitized** snippet and mapped: `400→bad_request`, `404→not_found`, `429→rate_limited`, `5xx→upstream_error`.
+API only; this tool does not scrape FlightAware’s website. The key is read from **`FLIGHTAWARE_AEROAPI_KEY`** (`x-apikey`). It never appears in logs, call records, or HTTP responses. Upstream error bodies are kept as a short **sanitized** snippet and mapped: `400→bad_request`, `404→not_found`, `429→rate_limited`, timeout/`0`/`504→upstream_unavailable`, `5xx→upstream_error`.
 
 ## Cost model
 
-About **$0.005 per result set** (configurable via `cost_per_call`). This is an **estimate** — confirm against the [FlightAware AeroAPI usage page](https://www.flightaware.com/commercial/aeroapi/). Hard budget per check (default `$0.05`; HTTP also caps at `$0.50`).
+About **$0.005 per result set** (configurable via `cost_per_call`). This is an **estimate** — confirm against the [FlightAware AeroAPI usage page](https://www.flightaware.com/commercial/aeroapi/). Hard budget is **per check** (default `$0.05`; HTTP also caps at `$0.50` per request). A daily cap is the **caller's** job; this tool does not enforce one.
 
 ## Recheck cadence
 
@@ -80,7 +81,7 @@ poll_interval(sched_dep, now, landed=False, sched_arr=None, actual_dep=None)
 | T−3h through scheduled departure, still at gate | every 15 minutes, until **actual** off |
 | Airborne | 30 min if block time ≤ 4h, else 60 min; **15 min** once estimated arrival is within 45 min |
 | Landed / cancelled / diverted | stop (`final`, `next_check_local: null`) |
-| unknown / no_data before departure | 60 min, or when the local day becomes visible |
+| unknown / `flight_not_found` before departure | 60 min, or when the local day becomes visible |
 
 ## Install and CLI
 
@@ -123,7 +124,7 @@ Tests inject `fetch=callable(path, params) -> (status, body)`.
 
 ## JSON Schema (LLM tool calling)
 
-`schema/check_flight.tool.json` — required `flight` and `date`; optional `origin` and `onward`. The description tells the model to pass the ticket-printed local date and never convert to UTC.
+`schema/check_flight.tool.json` — required `flight` and `date`; optional `origin` and `onward`. The description tells the model to pass the ticket-printed local date and never convert to UTC. Output requires `checked_at` (UTC, `Z`) and `next_poll_min` (same integer as `next_check_in_minutes`; null only when `final`). `error` always includes `retryable`.
 
 Example tool call:
 
@@ -171,7 +172,9 @@ Example output (on-time, truncated):
     "tz": "America/New_York",
     "human": "12:45 Mon 15 Mar (XXA time)"
   },
+  "checked_at": "2027-03-15T16:30:00Z",
   "next_check_in_minutes": 15,
+  "next_poll_min": 15,
   "error": null
 }
 ```
@@ -180,17 +183,19 @@ Example output (on-time, truncated):
 
 ## Vercel Function
 
-`api/check.py` — `GET`/`POST /api/check`.
+`api/check.py` — **`POST /api/check` is the contract** (JSON body). `GET` is supported for convenience; query strings can end up in access logs, so callers should prefer POST.
 
-1. Create a Vercel project from this repo.
+1. Create a Vercel project from this repo. Connect it to **`main`** after this PR is merged (the default branch currently has no function).
 2. Set `FLIGHTAWARE_AEROAPI_KEY` and `FLIGHTCHECK_TOKEN`.
-3. Deploy. `vercel.json` sets `maxDuration` 30s.
+3. Deploy. `vercel.json` sets `maxDuration` 30s. Upstream AeroAPI calls time out at **8s** so a client with a ~10s timeout can treat a hang as retryable.
 
-Auth failures are 401. Missing `flight`/`date` is 400. Budget exceeded is 402. Upstream AeroAPI errors are **structured JSON** (`error.code` / `error.snippet`), not a bare 502.
+Auth failures are 401. Missing `flight`/`date` is 400. Budget exceeded is 402. Upstream AeroAPI errors are **structured JSON** (`error.code` / `error.retryable` / `error.snippet`), not a bare 502.
 
 ```bash
 curl -sS -H "Authorization: Bearer $FLIGHTCHECK_TOKEN" \
-  "https://YOUR_DOMAIN/api/check?flight=XX123&date=2026-12-10&origin=LAX"
+  -H "Content-Type: application/json" \
+  -d '{"flight":"XX123","date":"2026-12-10","origin":"LAX"}' \
+  "https://YOUR_DOMAIN/api/check"
 ```
 
 Copy `.env.example` to `.env` for local experiments. `.env*` is gitignored.

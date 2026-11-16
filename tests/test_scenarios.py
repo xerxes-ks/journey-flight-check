@@ -30,6 +30,8 @@ def test_on_time():
     assert r.prediction.band == "on_track"
     assert r.prediction.dep_delay_min == 0
     assert r.ok
+    assert r.to_dict()["checked_at"] == "2027-03-15T16:30:00Z"
+    assert r.to_dict()["next_poll_min"] == 15
     d = r.flight.to_dict()
     so = d["scheduled_out"]
     assert so["tz"] == "America/New_York"
@@ -115,6 +117,8 @@ def test_cancelled_is_final():
     assert r.prediction.final is True
     assert r.next_check_local is None
     assert r.next_check_in_minutes is None
+    assert r.to_dict()["next_poll_min"] is None
+    assert r.to_dict()["checked_at"].endswith("Z")
     assert r.prediction.reasons[0].startswith("cancelled")
     r2 = run(
         scenario_fetch(flight="xx123-cancelled.json"),
@@ -140,7 +144,11 @@ def test_empty_response_is_unknown_not_on_track():
     assert r.flight.status == "unknown"
     assert r.prediction.band == "unknown"
     assert r.ok is False
-    assert r.error and r.error["code"] == "no_data"
+    assert r.error and r.error["code"] == "flight_not_found"
+    assert r.error["retryable"] is False
+    assert r.prediction.band == "unknown"
+    assert r.to_dict()["next_poll_min"] == r.next_check_in_minutes
+    assert r.to_dict()["checked_at"].endswith("Z")
     assert r.inbound is None
     assert r.next_check_local is not None
     assert r.next_check_in_minutes == 60

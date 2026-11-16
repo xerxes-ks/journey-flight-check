@@ -3,7 +3,7 @@
 import pytest
 
 from flightcheck import BudgetExceeded, check_flight
-from flightcheck.adapters.aeroapi import AeroAPIAdapter
+from flightcheck.adapters.aeroapi import AeroAPIAdapter, UPSTREAM_TIMEOUT_S
 from flightcheck.exceptions import AeroAPIError
 from flightcheck.model import parse_time
 from tests.conftest import NEAR_DEP, load_fx, make_fetch, scenario_fetch
@@ -52,6 +52,9 @@ def test_error_codes_mapped():
         )
         assert r.error["code"] == code
         assert r.ok is False
+        assert "retryable" in r.error
+        assert r.error["retryable"] is (code in ("rate_limited", "upstream_error"))
+        assert r.error["retryable"] is (code not in ("bad_request", "not_found"))
 
 
 def test_cost_is_configurable():
@@ -84,3 +87,21 @@ def test_min_turn_override():
     )
     # inbound 18:20Z + 10 min = 18:30Z vs 18:00Z → +30
     assert r.prediction.dep_delay_min == 30
+
+
+def test_upstream_timeout_is_fail_fast():
+    assert UPSTREAM_TIMEOUT_S == 8
+
+
+def test_timeout_is_unavailable_and_retryable():
+    def fetch(path, params):
+        raise TimeoutError("hang")
+
+    r = check_flight(
+        {"flight": "XX123", "date": "2027-03-15"},
+        fetch=fetch,
+        now=parse_time(NEAR_DEP),
+    )
+    assert r.ok is False
+    assert r.error["code"] == "upstream_unavailable"
+    assert r.error["retryable"] is True
