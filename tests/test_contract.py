@@ -112,7 +112,9 @@ def test_tool_schema_is_tiny(schema):
     assert {"status", "band", "final", "summary", "checked_at", "next_poll_min"}.issubset(required_out)
     err_req = set(schema["$defs"]["error"]["required"])
     assert {"code", "message", "retryable"}.issubset(err_req)
-    assert "flight_not_found" in schema["$defs"]["error"]["properties"]["code"]["enum"]
+    codes = set(schema["$defs"]["error"]["properties"]["code"]["enum"])
+    assert {"flight_not_found", "timeout", "rate_limited", "upstream_error"}.issubset(codes)
+    assert "checked_at" in schema["outputSchema"]["properties"]
 
 
 def test_next_poll_min_aliases_minutes(schema):
@@ -137,6 +139,41 @@ def test_cancelled_next_poll_min_is_null(schema):
     data = result.to_dict()
     assert data["final"] is True
     assert data["next_poll_min"] is None
+    validator(schema).validate(data)
+
+
+def test_response_never_contains_api_key(schema, monkeypatch):
+    key = "super-secret-test-key-abcxyz"
+    monkeypatch.setenv("FLIGHTAWARE_AEROAPI_KEY", key)
+    result = check_flight(
+        {"flight": "XX123", "date": "2027-03-15", "origin": "XXA"},
+        fetch=scenario_fetch(),
+        now=parse_time(NEAR_DEP),
+        key=key,
+    )
+    data = result.to_dict()
+    blob = json.dumps(data)
+    assert key not in blob
+    assert "x-apikey" not in blob.lower()
+    for call in data["calls"]:
+        params_blob = json.dumps(call.get("params") or {})
+        assert key not in params_blob
+        assert "apikey" not in params_blob.lower()
+    validator(schema).validate(data)
+
+
+def test_too_early_next_check_is_not_null(schema):
+    result = check_flight(
+        {"flight": "XX123", "date": "2027-04-01", "origin": "LAX"},
+        fetch=scenario_fetch(),
+        now=parse_time(NEAR_DEP),
+    )
+    data = result.to_dict()
+    assert data["status"] == "too_early"
+    assert data["final"] is False
+    assert data["next_check_local"] is not None
+    assert data["next_poll_min"] is not None
+    assert data["checked_at"].endswith("Z")
     validator(schema).validate(data)
 
 

@@ -116,6 +116,7 @@ def test_missing_fields_are_400(handler_env):
     )
     assert status == 400
     assert "date" in payload["error"]["message"]
+    assert payload["error"]["retryable"] is False
 
 
 def test_budget_exceeded_is_402(handler_env, monkeypatch):
@@ -136,6 +137,7 @@ def test_budget_exceeded_is_402(handler_env, monkeypatch):
     )
     assert status == 402
     assert payload["error"]["code"] == "budget_exceeded"
+    assert payload["error"]["retryable"] is False
 
 
 def test_upstream_error_is_structured_json_not_bare_502(handler_env, monkeypatch):
@@ -160,6 +162,7 @@ def test_upstream_error_is_structured_json_not_bare_502(handler_env, monkeypatch
     )
     assert isinstance(payload, dict)
     assert payload.get("error", {}).get("code") == "upstream_error"
+    assert payload["error"]["retryable"] is True
     assert "503" in payload["error"]["message"] or payload["error"].get("http") == 503
     # Not a bare 502 with a string body.
     assert status != 502 or isinstance(payload.get("error"), dict)

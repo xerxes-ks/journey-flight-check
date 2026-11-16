@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import socket
 import time
 import urllib.error
 import urllib.parse
@@ -21,9 +22,6 @@ from typing import Optional
 from zoneinfo import ZoneInfo
 
 from ..exceptions import AeroAPIError, BudgetExceeded
-
-# Fail-fast so a caller with a ~10s timeout can treat a hang as retryable.
-UPSTREAM_TIMEOUT_S = 8
 from ..model import (
     DEFAULT_COST_PER_CALL,
     DEFAULT_INBOUND_WINDOW_H,
@@ -41,6 +39,18 @@ from .schedule import ScheduleAdapter
 
 BASE = "https://aeroapi.flightaware.com/aeroapi"
 SNIPPET_LEN = 240
+# Fail-fast so a caller with a ~10s timeout can treat a hang as retryable.
+UPSTREAM_TIMEOUT_S = 8
+TIMEOUT_HTTP = -1
+
+
+def is_timeout(exc: BaseException) -> bool:
+    if isinstance(exc, (TimeoutError, socket.timeout)):
+        return True
+    reason = getattr(exc, "reason", None)
+    if isinstance(reason, (TimeoutError, socket.timeout)):
+        return True
+    return "timed out" in str(exc).lower()
 
 
 def date_window(
@@ -128,7 +138,9 @@ class AeroAPIAdapter:
                 except Exception:
                     body = {"detail": raw.decode("utf-8", "replace")[:SNIPPET_LEN]}
             return exc.code, body
-        except Exception:
+        except Exception as exc:
+            if is_timeout(exc):
+                return TIMEOUT_HTTP, {"detail": "timeout"}
             return 0, {}
 
     def call(self, path, params=None):
@@ -140,8 +152,11 @@ class AeroAPIAdapter:
             status, body = self.fetch(path, params or {})
         except (BudgetExceeded, AeroAPIError):
             raise
-        except Exception:
-            status, body = 0, {}
+        except Exception as exc:
+            if is_timeout(exc):
+                status, body = TIMEOUT_HTTP, {"detail": "timeout"}
+            else:
+                status, body = 0, {}
         self.calls.append({
             "path": redact(path, self.key),
             "params": {k: redact(v, self.key) for k, v in (params or {}).items()},
@@ -149,6 +164,8 @@ class AeroAPIAdapter:
             "cost_usd": cost,
             "ms": int((time.time() - t0) * 1000),
         })
+        if status == TIMEOUT_HTTP:
+            raise AeroAPIError(0, "timeout", code="timeout")
         if status != 200:
             raise AeroAPIError(int(status or 0), _body_snippet(body, self.key))
         if not isinstance(body, dict):

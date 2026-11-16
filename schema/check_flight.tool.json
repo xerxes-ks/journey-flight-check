@@ -237,7 +237,7 @@
             "flight_not_found", "no_data", "not_found", "bad_request",
             "rate_limited", "upstream_rate_limited",
             "unauthorized", "forbidden",
-            "upstream_error", "upstream_unavailable",
+            "upstream_error", "upstream_unavailable", "timeout",
             "budget_exceeded", "error"
           ]
         },

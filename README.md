@@ -11,7 +11,7 @@ Tickets print local times. Callers (an LLM concierge or a cron) should **never c
 - **Input `date`** is the departure date as printed on the ticket (the origin airport’s local calendar date). There is no timezone parameter. Optional `origin` (IATA) disambiguates duplicate flight numbers and is used to resolve timezone *before* the first AeroAPI call.
 - **Output times** are ISO-8601 strings **with the airport’s offset**, plus `tz` (IANA name) and a short `human` form such as `02:55 Sun 13 Dec (DEL time)`. Departures use the origin tz; arrivals use the destination tz. Reason strings use those local clocks, never UTC.
 - **`checked_at`** is the UTC time of this check (ISO with `Z`). Store it with the result to judge freshness.
-- **`next_check_local`** is in the origin’s local time; **`next_check_in_minutes`** / **`next_poll_min`** (same integer) is the wait from `now`. Null means do not poll again (landed, cancelled, diverted). `too_early` returns minutes until the flight can become visible — not null — so a TypeScript cron does not need a second copy of the cadence table.
+- **`next_check_local`** is in the origin’s local time; **`next_check_in_minutes`** / **`next_poll_min`** (same integer) is the wait from `now`. **Null only when the result is `final`** (landed, cancelled, diverted) — that is the only signal a scheduler should stop. `too_early` is not final: `next_check` is the visibility time (scheduled departure minus 47h, or origin-local midnight minus 47h if STD is unknown) so a cron never treats “too far out” as done and never needs its own copy of the cadence table.
 - **`summary`** is a short paragraph a chat bot can relay as-is (human band words: on track / worth watching / at risk). Top-level `status`, `band`, and `final` duplicate the fields a cron or LLM is most likely to branch on.
 
 ### Timezones
@@ -27,7 +27,7 @@ The **too_early** path makes **no AeroAPI call**, so it cannot read those fields
 - **Delay prediction:** expected departure and arrival delay in minutes, a band (`on_track` / `watch` / `at_risk` / `unknown`), and local-time reasons. Evidence order: airline estimate, then inbound ETA + min turn, then an optional historical prior. Default min turn is **35 min**, or **60 min** for wide-body/long-haul (`B77x`/`B78x`/`A33x`/`A35x`/`A38x`, or block time > 5h). Overridable via `min_turn`.
 - **Connection risk** (optional `onward`): `min_connect_min`, `bags_recheck`, `separate_ticket`, plus `terminal_change` / `terminal_change_min` and `checkin_close_min` (bag-drop or check-in close, used for separate tickets too). The summary mentions the connection when `onward` is given. Connection times include day and date (overnight connections).
 - **Calls and cost:** each AeroAPI request with an estimated USD cost.
-- **Errors:** structured `{code, message, retryable, http?, snippet?}` (snippet sanitized). Empty AeroAPI lists and unknown flights are **not** on_track: HTTP 200, `ok: false`, `status: unknown`, `prediction.band: unknown`, `error.code: flight_not_found`, `retryable: false`. AeroAPI HTTP 404 is `not_found`. 429 is `rate_limited` (`retryable: true`). 5xx/timeouts are `upstream_error` (`retryable: true`). The HTTP route never returns a bare 502.
+- **Errors:** structured `{code, message, retryable, http?, snippet?}`. `retryable` is **true** for `rate_limited`, `upstream_error`, and `timeout`; **false** for `bad_request`, `not_found`, `flight_not_found`, `budget_exceeded`, and `unauthorized`. Empty AeroAPI lists are **not** on_track: HTTP 200, `ok: false`, `status`/`band` `unknown`, `error.code: flight_not_found`. AeroAPI HTTP 404 is `not_found`. An 8s urlopen hang is `timeout`. The HTTP route never returns a bare 502.
 
 ## Architecture
 
@@ -59,11 +59,11 @@ flight + ticket-local date [+ origin] [+ onward]
 
 The instance is chosen by the **origin-local** calendar date of `scheduled_out`. UTC date is used only when the origin tz is unknown.
 
-API only; this tool does not scrape FlightAware’s website. The key is read from **`FLIGHTAWARE_AEROAPI_KEY`** (`x-apikey`). It never appears in logs, call records, or HTTP responses. Upstream error bodies are kept as a short **sanitized** snippet and mapped: `400→bad_request`, `404→not_found`, `429→rate_limited`, timeout/`0`/`504→upstream_unavailable`, `5xx→upstream_error`.
+API only; this tool does not scrape FlightAware’s website. The key is read from **`FLIGHTAWARE_AEROAPI_KEY`** (`x-apikey`). It never appears in logs, `calls[].params`, or HTTP responses. Upstream error bodies are kept as a short **sanitized** snippet and mapped: `400→bad_request`, `404→not_found`, `429→rate_limited`, urlopen timeout → `timeout`, `5xx→upstream_error`.
 
 ## Cost model
 
-About **$0.005 per result set** (configurable via `cost_per_call`). This is an **estimate** — confirm against the [FlightAware AeroAPI usage page](https://www.flightaware.com/commercial/aeroapi/). Hard budget is **per check** (default `$0.05`; HTTP also caps at `$0.50` per request). A daily cap is the **caller's** job; this tool does not enforce one.
+About **$0.005 per result set** (configurable via `cost_per_call`). This is an **estimate** — confirm against the [FlightAware AeroAPI usage page](https://www.flightaware.com/commercial/aeroapi/). Hard budget is **per request** (library default `$0.05`; HTTP `HTTP_BUDGET_CAP` `$0.50`). A **daily** cap is the **caller's** job; this tool does not enforce one.
 
 ## Recheck cadence
 
@@ -75,7 +75,7 @@ poll_interval(sched_dep, now, landed=False, sched_arr=None, actual_dep=None)
 
 | When | Interval |
 |---|---|
-| Further out than T−48h | `too_early` / next_check at T−48h (never null) |
+| Further out than T−48h | `too_early` (not final); `next_check` at visibility, never null |
 | T−48h to T−6h | every 3 hours |
 | T−6h to T−3h | every hour |
 | T−3h through scheduled departure, still at gate | every 15 minutes, until **actual** off |
@@ -179,7 +179,7 @@ Example output (on-time, truncated):
 }
 ```
 
-`too_early` (no API call): `status: "too_early"`, `next_check_local` at T−48h in origin local time.
+`too_early` (no API call): `status: "too_early"`, `final: false`, `next_check_local` at visibility (not null). Schedulers must keep polling; only `final` results set `next_check` / `next_poll_min` to null.
 
 ## Vercel Function
 

@@ -1,10 +1,12 @@
 """Adapter: budget guard, date window, instance picking, inbound window."""
 
+import urllib.error
+
 import pytest
 
 from flightcheck import BudgetExceeded, check_flight
 from flightcheck.adapters.aeroapi import AeroAPIAdapter, UPSTREAM_TIMEOUT_S
-from flightcheck.exceptions import AeroAPIError
+from flightcheck.exceptions import AeroAPIError, error_dict
 from flightcheck.model import parse_time
 from tests.conftest import NEAR_DEP, load_fx, make_fetch, scenario_fetch
 
@@ -89,11 +91,21 @@ def test_min_turn_override():
     assert r.prediction.dep_delay_min == 30
 
 
+def test_retryable_flags():
+    assert error_dict("rate_limited", "x")["retryable"] is True
+    assert error_dict("upstream_error", "x")["retryable"] is True
+    assert error_dict("timeout", "x")["retryable"] is True
+    assert error_dict("bad_request", "x")["retryable"] is False
+    assert error_dict("not_found", "x")["retryable"] is False
+    assert error_dict("budget_exceeded", "x")["retryable"] is False
+    assert error_dict("unauthorized", "x")["retryable"] is False
+
+
 def test_upstream_timeout_is_fail_fast():
     assert UPSTREAM_TIMEOUT_S == 8
 
 
-def test_timeout_is_unavailable_and_retryable():
+def test_timeout_is_retryable():
     def fetch(path, params):
         raise TimeoutError("hang")
 
@@ -103,5 +115,19 @@ def test_timeout_is_unavailable_and_retryable():
         now=parse_time(NEAR_DEP),
     )
     assert r.ok is False
-    assert r.error["code"] == "upstream_unavailable"
+    assert r.error["code"] == "timeout"
+    assert r.error["retryable"] is True
+    assert r.to_dict()["checked_at"].endswith("Z")
+
+
+def test_urlerror_timed_out_is_timeout():
+    def fetch(path, params):
+        raise urllib.error.URLError(TimeoutError("timed out"))
+
+    r = check_flight(
+        {"flight": "XX123", "date": "2027-03-15"},
+        fetch=fetch,
+        now=parse_time(NEAR_DEP),
+    )
+    assert r.error["code"] == "timeout"
     assert r.error["retryable"] is True
