@@ -12,7 +12,8 @@ from flightcheck.exceptions import BudgetExceeded, Conflict, InvalidBudget, Isol
 from flightcheck.mode import fixture_fetch
 from flightcheck.model import parse_time
 from flightcheck.money import parse_money
-from flightcheck.routes import handle_tick, handle_track, handle_tracked
+from flightcheck.routes import handle_simulate, handle_tick, handle_track, handle_tracked
+from flightcheck.simulate import run_simulate
 from flightcheck.store import MemoryStore, namespaced_store, use_store
 from flightcheck.track import (
     load_track,
@@ -107,6 +108,7 @@ def test_budget_zero_means_zero_provider_calls():
     )
     assert calls == []
     assert r.error and r.error["code"] == "budget_exceeded"
+    assert r.error["message"] == "budget too small"
 
 
 def test_malformed_budget_makes_no_provider_calls():
@@ -476,6 +478,7 @@ def test_track_zero_budget_is_402_and_creates_no_track(monkeypatch):
     })
     assert status == 402, payload
     assert payload["error"]["code"] == "budget_exceeded"
+    assert payload["error"]["message"] == "budget too small"
     assert store.list_prefix("fixtures/tracks/") == []
     use_store(None)
 
@@ -540,6 +543,57 @@ def test_track_allows_vercel_production_host(monkeypatch):
     assert status == 200, payload
     assert payload.get("tracking_id")
     use_store(None)
+
+
+def test_simulate_ok_with_empty_webhook_allowlist(monkeypatch):
+    """Simulate must not consult the allowlist or POST to any host."""
+    monkeypatch.setenv("FLIGHTCHECK_WEBHOOK_ALLOWED_HOSTS", "")
+    for key in (
+        "VERCEL_URL",
+        "VERCEL_BRANCH_URL",
+        "VERCEL_PROJECT_PRODUCTION_URL",
+        "VERCEL_ENV",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+    def no_http(*a, **k):
+        raise AssertionError("simulate must not deliver to an external host")
+
+    monkeypatch.setattr("flightcheck.events.post_json", no_http)
+    monkeypatch.setattr("flightcheck.events.deliver_webhook", no_http)
+    monkeypatch.setattr("flightcheck.track.deliver_webhook", no_http)
+
+    out = run_simulate({
+        "scenario": "on_time",
+        "flight": "XX123",
+        "date": "2027-06-22",
+        "origin": "LHR",
+        "std_local": "09:40",
+    })
+    assert out["ok"] is True
+    assert out["timeline"]
+    assert out["cost_usd"] == 0.0
+
+    monkeypatch.setenv("FLIGHTCHECK_TOKEN", TOKEN)
+    status, payload = handle_simulate(
+        "POST",
+        {"Authorization": f"Bearer {TOKEN}"},
+        {},
+        {"scenario": "on_time", "flight": "XX123", "date": "2027-06-22", "origin": "LHR"},
+    )
+    assert status == 200, payload
+    assert payload.get("ok") is True
+    assert payload.get("timeline")
+
+    with pytest.raises(WebhookNotAllowed):
+        start_track(
+            _payload(),
+            store=MemoryStore(),
+            now=NOW,
+            fetch=scenario_fetch(),
+            deliver=lambda *a, **k: {"ok": True},
+            webhook_secret="x",
+        )
 
 
 def test_library_require_webhook_url():

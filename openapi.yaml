@@ -163,7 +163,7 @@ paths:
         "200":
           description: scenarios
     post:
-      summary: Zero-cost cadence replay
+      summary: Zero-cost cadence replay (in-memory sender; no external webhook delivery)
       security: [{bearerAuth: []}]
       requestBody:
         content:

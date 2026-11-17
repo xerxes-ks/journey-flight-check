@@ -588,7 +588,7 @@ def check_flight(req: CheckRequest | dict, *, fetch=None, adapter=None, now=None
         else:
             flight = None
     except BudgetExceeded as exc:
-        error = error_dict("budget_exceeded", "The live-data budget is too small for a lookup.")
+        error = error_dict("budget_exceeded", "budget too small")
         flight = None
     except AeroAPIError as exc:
         error = exc.to_dict()
