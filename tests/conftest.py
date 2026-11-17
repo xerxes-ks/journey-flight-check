@@ -21,6 +21,12 @@ NEAR_DEP = "2027-03-15T16:30:00Z"  # T-90 min vs 18:00Z STD
 FAR_DEP = "2027-03-15T08:00:00Z"   # T-10 h, outside the 6 h inbound window
 
 
+@pytest.fixture(autouse=True)
+def _allow_example_webhooks(monkeypatch):
+    """Unit tests use https://example.test hooks; production still requires the env."""
+    monkeypatch.setenv("FLIGHTCHECK_WEBHOOK_ALLOWED_HOSTS", "example.test")
+
+
 def load_fx(name: str) -> dict:
     with open(os.path.join(FX, name)) as fh:
         return json.load(fh)

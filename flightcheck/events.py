@@ -12,6 +12,7 @@ import urllib.parse
 import urllib.request
 from typing import Callable, Optional
 
+from .exceptions import WebhookNotAllowed
 from .model import mins, parse_time
 
 EVENT_NAMES = (
@@ -178,17 +179,47 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
+def _host_from_url(value: str) -> str:
+    text = (value or "").strip()
+    if not text:
+        return ""
+    return text.split("://")[-1].split("/")[0].split(":")[0].lower()
+
+
 def webhook_allowed_hosts() -> set[str]:
     raw = os.environ.get("FLIGHTCHECK_WEBHOOK_ALLOWED_HOSTS") or ""
     hosts = {h.strip().lower() for h in raw.split(",") if h.strip()}
     for key in ("VERCEL_URL", "VERCEL_BRANCH_URL", "VERCEL_PROJECT_PRODUCTION_URL"):
-        value = (os.environ.get(key) or "").strip()
-        if not value:
-            continue
-        host = value.split("://")[-1].split("/")[0].split(":")[0].lower()
+        host = _host_from_url(os.environ.get(key) or "")
         if host:
             hosts.add(host)
     return hosts
+
+
+def track_webhook_allowed_hosts() -> set[str]:
+    """Hosts accepted at POST /api/track: allowlist plus the production host."""
+    raw = os.environ.get("FLIGHTCHECK_WEBHOOK_ALLOWED_HOSTS") or ""
+    hosts = {h.strip().lower() for h in raw.split(",") if h.strip()}
+    prod = _host_from_url(os.environ.get("VERCEL_PROJECT_PRODUCTION_URL") or "")
+    if prod:
+        hosts.add(prod)
+    return hosts
+
+
+def require_webhook_url(url: str) -> None:
+    """Reject a webhook_url that could not be delivered. Raises WebhookNotAllowed."""
+    parsed = urllib.parse.urlparse(str(url or "").strip())
+    host = (parsed.hostname or "").lower()
+    scheme = parsed.scheme.lower()
+    loopback = host in {"127.0.0.1", "localhost", "::1"}
+    hosted = bool(os.environ.get("VERCEL_ENV"))
+    if scheme != "https" and not (scheme == "http" and loopback and not hosted):
+        raise WebhookNotAllowed("webhook_url must be HTTPS")
+    allowed = track_webhook_allowed_hosts()
+    if loopback and not hosted:
+        allowed.add(host)
+    if not host or host not in allowed:
+        raise WebhookNotAllowed("webhook_url host is not allowed")
 
 
 def _opener():

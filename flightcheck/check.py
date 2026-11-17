@@ -32,7 +32,7 @@ from .model import (
     mins,
     parse_date,
 )
-from .money import MAX_BUDGET_USD, parse_money
+from .money import MAX_BUDGET_USD, request_budget
 from .phase import phase_for
 from .predict import predict
 from .sanitize import redact, secret_values
@@ -122,18 +122,12 @@ def parse_request(data: dict) -> CheckRequest:
     cadence = str(data.get("cadence") or "essential").strip().lower()
     if cadence not in ("essential", "dense"):
         cadence = "essential"
-    if "budget_usd" in data:
-        raw_budget = data.get("budget_usd")
-    elif "budget" in data:
-        raw_budget = data.get("budget")
-    else:
-        raw_budget = None
     return CheckRequest(
         ident=str(ident),
         date=str(date)[:10],
         origin=(str(data["origin"]).upper() if data.get("origin") else None),
         onward=parse_onward(onward if isinstance(onward, dict) else None),
-        budget_usd=parse_money(raw_budget, DEFAULT_BUDGET_USD, max_value=MAX_BUDGET_USD),
+        budget_usd=request_budget(data, DEFAULT_BUDGET_USD, max_value=MAX_BUDGET_USD),
         min_turn=min_turn,
         inbound_window_h=_as_float(data.get("inbound_window_h"), 6),
         prior=prior,

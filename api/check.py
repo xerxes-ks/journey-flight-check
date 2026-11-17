@@ -29,11 +29,11 @@ from flightcheck.exceptions import (  # noqa: E402
 )
 from flightcheck.mode import fixture_fetch, is_fixtures, resolve_now  # noqa: E402
 from flightcheck.model import DEFAULT_COST_PER_CALL, UTC  # noqa: E402
+from flightcheck.money import HTTP_BUDGET_CAP  # noqa: E402
 from flightcheck.sanitize import redact  # noqa: E402
 from flightcheck.store import StorageNotConfigured, get_store, namespaced_store  # noqa: E402
 from flightcheck.track import daily_budget, request_namespace, reserve_spend  # noqa: E402
 
-HTTP_BUDGET_CAP = 0.50
 ERROR_HTTP = HTTP_FOR_CODE
 
 
