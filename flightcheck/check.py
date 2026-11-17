@@ -17,6 +17,8 @@ from .model import (
     UTC,
     BAND_HUMAN,
     DEFAULT_ALERT_DELAY_MIN,
+    DEFAULT_BUDGET_USD,
+    DEFAULT_COST_PER_CALL,
     DEFAULT_MCT,
     DEFAULT_SELF_TRANSFER_MCT,
     TOO_EARLY_HOURS,
@@ -30,6 +32,7 @@ from .model import (
     mins,
     parse_date,
 )
+from .money import MAX_BUDGET_USD, parse_money
 from .phase import phase_for
 from .predict import predict
 from .sanitize import redact, secret_values
@@ -119,16 +122,22 @@ def parse_request(data: dict) -> CheckRequest:
     cadence = str(data.get("cadence") or "essential").strip().lower()
     if cadence not in ("essential", "dense"):
         cadence = "essential"
+    if "budget_usd" in data:
+        raw_budget = data.get("budget_usd")
+    elif "budget" in data:
+        raw_budget = data.get("budget")
+    else:
+        raw_budget = None
     return CheckRequest(
         ident=str(ident),
         date=str(date)[:10],
         origin=(str(data["origin"]).upper() if data.get("origin") else None),
         onward=parse_onward(onward if isinstance(onward, dict) else None),
-        budget_usd=_as_float(data.get("budget_usd") or data.get("budget"), 0.05),
+        budget_usd=parse_money(raw_budget, DEFAULT_BUDGET_USD, max_value=MAX_BUDGET_USD),
         min_turn=min_turn,
         inbound_window_h=_as_float(data.get("inbound_window_h"), 6),
         prior=prior,
-        cost_per_call=_as_float(data.get("cost_per_call"), 0.005),
+        cost_per_call=DEFAULT_COST_PER_CALL,
         now=parse_now_maybe(data.get("now")),
         cadence=cadence,
         alert_delay_min=_as_int(data.get("alert_delay_min"), DEFAULT_ALERT_DELAY_MIN),
@@ -139,12 +148,13 @@ def parse_request(data: dict) -> CheckRequest:
     )
 
 
-def make_adapter(req: CheckRequest, fetch=None, key=None):
+def make_adapter(req: CheckRequest, fetch=None, key=None, spend_guard=None):
     api_key = key if key is not None else os.environ.get("FLIGHTAWARE_AEROAPI_KEY")
     kwargs = dict(
         budget_usd=req.budget_usd,
         inbound_window_h=req.inbound_window_h,
-        cost_per_call=req.cost_per_call,
+        cost_per_call=DEFAULT_COST_PER_CALL,
+        spend_guard=spend_guard,
     )
     if fetch is not None:
         return AeroAPIAdapter(api_key or "unused", fetch=fetch, **kwargs)
@@ -516,7 +526,15 @@ def _next_check(
     return packed[0], packed[1], plan.checkpoint, plan.attempts
 
 
-def check_flight(req: CheckRequest | dict, *, fetch=None, adapter=None, now=None, key=None) -> CheckResult:
+def _onward_reason(req: CheckRequest, *, looked_up: bool, conn) -> Optional[str]:
+    if not req.onward:
+        return None
+    if conn is not None:
+        return None
+    return "not_found" if looked_up else "untracked"
+
+
+def check_flight(req: CheckRequest | dict, *, fetch=None, adapter=None, now=None, key=None, spend_guard=None) -> CheckResult:
     if not isinstance(req, CheckRequest):
         req = parse_request(req)
     now = now or req.now or dt.datetime.now(UTC)
@@ -542,6 +560,7 @@ def check_flight(req: CheckRequest | dict, *, fetch=None, adapter=None, now=None
             inbound=None,
             prediction=pred,
             connection=None,
+            connection_reason=_onward_reason(req, looked_up=False, conn=None),
             calls=[],
             cost_usd_est=0.0,
             ok=True,
@@ -559,7 +578,9 @@ def check_flight(req: CheckRequest | dict, *, fetch=None, adapter=None, now=None
             attempts=attempts,
         )
 
-    adapter = adapter or make_adapter(req, fetch=fetch, key=key)
+    adapter = adapter or make_adapter(req, fetch=fetch, key=key, spend_guard=spend_guard)
+    if spend_guard is not None:
+        adapter.spend_guard = spend_guard
     error = None
     warning = None
     flight = None
@@ -637,9 +658,11 @@ def check_flight(req: CheckRequest | dict, *, fetch=None, adapter=None, now=None
         now=now,
     )
     conn = None
+    onward_looked_up = False
     if req.onward and flight.live and not error and _should_fetch_onward(
         req, flight, pred, now, tzname, probe_checkpoint,
     ):
+        onward_looked_up = True
         onward_date = req.onward.date or req.date
         onward_tz = tz_for_iata(req.onward.origin) if req.onward.origin else tzname
         try:
@@ -684,6 +707,7 @@ def check_flight(req: CheckRequest | dict, *, fetch=None, adapter=None, now=None
         inbound=flight.inbound,
         prediction=pred,
         connection=conn,
+        connection_reason=_onward_reason(req, looked_up=onward_looked_up, conn=conn),
         calls=calls,
         cost_usd_est=round(spent, 4),
         ok=ok,

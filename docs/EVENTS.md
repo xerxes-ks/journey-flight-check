@@ -9,6 +9,8 @@ When a webhook arrives, **relay `summary` as-is**. Do not convert times. Every t
 ```json
 {
   "event": "delay_likely",
+  "event_id": "evt_…",
+  "seq": 2,
   "tracking_id": "trk_…",
   "ref": "your-opaque-id",
   "flight": "XX123",
@@ -25,7 +27,9 @@ When a webhook arrives, **relay `summary` as-is**. Do not convert times. Every t
 }
 ```
 
-Verify `X-Flightcheck-Signature: sha256=<hex>` with HMAC-SHA256 of the raw body and `FLIGHTCHECK_WEBHOOK_SECRET`.
+Verify `X-Flightcheck-Signature: sha256=<hex>` with HMAC-SHA256 of the raw body and `FLIGHTCHECK_WEBHOOK_SECRET`. Treat `event_id` as the idempotency key: a retried delivery after a 5xx uses the same `event_id` and `seq`. After you acknowledge with HTTP 2xx the service will not send that event again.
+
+Delivery is HTTPS only, does not follow redirects, times out at 3 seconds, and is not attempted when the webhook secret is missing. Hosts must be listed in `FLIGHTCHECK_WEBHOOK_ALLOWED_HOSTS` (the Vercel deployment host is also allowed). Failed deliveries stay in a bounded pending queue and are retried on later ticks without another paid flight lookup.
 
 ## Events
 
@@ -41,7 +45,7 @@ Verify `X-Flightcheck-Signature: sha256=<hex>` with HMAC-SHA256 of the raw body 
 | `diverted` | Diverted. Tracking ends. | Relay `summary` (includes the divert airport when known). |
 | `departed` | Airborne (`phase=airborne`). Includes expected landing in `times`. | “It’s away. Estimated landing …” — never say this while `phase` is `taxiing`. |
 | `landed` | Runway on or at the arrival gate. Terminal / gate / belt are in `snapshot.flight` when known. | Relay `summary`. |
-| `connection_at_risk` | `impact_band` is `at_risk` (only if `onward` was given). | Relay `summary`; do not lowercase the onward flight number. |
+| `connection_at_risk` | `impact_band` is `at_risk` (only if `onward` was given). | Relay `summary`; do not lowercase the onward flight number. If `snapshot.connection` is null, read `snapshot.connection_reason` (`untracked` or `not_found`) — an unavailable onward leg is not a live connection. |
 | `tracking_ended` | No more checks (`final`). | Stop expecting updates. |
 | `check_failed` | Live status failed after retries. | “Live status is temporarily unavailable.” Never quote raw upstream text. |
 

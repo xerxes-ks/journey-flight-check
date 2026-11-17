@@ -4,11 +4,22 @@ BlobStore is the default whenever BLOB_READ_WRITE_TOKEN is set (private
 Vercel Blob, stdlib urllib, no SDK). MemoryStore is for tests/simulate.
 RedisStore is optional: KV/Upstash env AND FLIGHTCHECK_STORAGE=redis.
 
-Layout:
+Layout (live):
   tracks/{tracking_id}.json
   events/{tracking_id}/{ts}-{seq}.json
+  pending/{tracking_id}/{event_id}.json
+  locks/tick.json
   sink/{ts}.json
   budget/{YYYY-MM-DD}.json
+
+Fixture traffic is isolated under the ``fixtures/`` prefix on the same
+backing store (PrefixedStore). Live cron lists ``tracks/`` only.
+
+Conditional writes: private Vercel Blob PUT accepts ``x-if-match`` (SDK
+putOptionHeaderMap.ifMatch, API v13). BlobStore.put_json_if_current sends
+that header plus ``x-if-none-match: *`` on create. MemoryStore uses a
+mutex around the version check. This is compare-and-swap of the object,
+not an in-process flag.
 """
 
 from __future__ import annotations
@@ -31,7 +42,11 @@ BLOB_API = "https://vercel.com/api/blob"
 BLOB_API_VERSION = "13"
 EVENTS_MAX = 200
 SINK_MAX = 50
+PENDING_MAX = 40
 PREFIX = "fc:"
+FIXTURE_PREFIX = "fixtures"
+LIVE_NAMESPACE = "live"
+FIXTURE_NAMESPACE = "fixtures"
 
 
 class StorageNotConfigured(CheckError):
@@ -67,7 +82,11 @@ class Storage:
         raise NotImplementedError
 
     def put_json_if_current(self, path: str, obj: dict, expected_version: int) -> bool:
-        """Write obj with version=expected+1 unless a newer version is already stored."""
+        """Write obj with version=expected+1 unless a newer version is already stored.
+
+        Default implementation is read/check/write. BlobStore overrides this with
+        an ETag / x-if-match conditional PUT. MemoryStore holds a mutex.
+        """
         current = self.get_json(path)
         if current is not None:
             have = int(current.get("version") or 0)
@@ -120,6 +139,55 @@ class MemoryStore(Storage):
             self.objects[_norm(path)] = json.dumps(nxt, separators=(",", ":"))
             obj["version"] = nxt["version"]
             return True
+
+
+class PrefixedStore(Storage):
+    """Isolate a namespace on a shared backing store (fixtures/ vs live)."""
+
+    def __init__(self, inner: Storage, prefix: str):
+        self.inner = inner
+        self.prefix = _norm(prefix).strip("/")
+        self.kind = getattr(inner, "kind", "memory")
+
+    def _p(self, path: str) -> str:
+        name = _norm(path)
+        if not self.prefix:
+            return name
+        return f"{self.prefix}/{name}"
+
+    def get_json(self, path: str) -> Optional[dict]:
+        return self.inner.get_json(self._p(path))
+
+    def put_json(self, path: str, obj: dict) -> None:
+        return self.inner.put_json(self._p(path), obj)
+
+    def delete(self, path: str) -> None:
+        return self.inner.delete(self._p(path))
+
+    def list_prefix(self, prefix: str) -> list[str]:
+        raw = self.inner.list_prefix(self._p(prefix))
+        cut = f"{self.prefix}/" if self.prefix else ""
+        out = []
+        for item in raw:
+            name = _norm(item)
+            if cut and name.startswith(cut):
+                name = name[len(cut):]
+            out.append(name)
+        return out
+
+    def put_json_if_current(self, path: str, obj: dict, expected_version: int) -> bool:
+        return self.inner.put_json_if_current(self._p(path), obj, expected_version)
+
+
+def namespaced_store(store: Storage, namespace: str | None) -> Storage:
+    ns = (namespace or LIVE_NAMESPACE).strip().lower()
+    if ns in ("fixture", "synthetic"):
+        ns = FIXTURE_NAMESPACE
+    if ns != FIXTURE_NAMESPACE:
+        return store
+    if isinstance(store, PrefixedStore) and store.prefix == FIXTURE_PREFIX:
+        return store
+    return PrefixedStore(store, FIXTURE_PREFIX)
 
 
 class RedisStore(Storage):
@@ -204,6 +272,7 @@ class BlobStore(Storage):
         ).rstrip("/")
         self.fetch = fetch
         self._store_id = _blob_store_id(token)
+        self._etags: dict[str, str] = {}
 
     def _headers(self, extra=None) -> dict:
         h = {
@@ -227,29 +296,42 @@ class BlobStore(Storage):
             raw = exc.read() if exc.fp else b""
             return exc.code, raw, dict(exc.headers or {})
 
-    def put_json(self, path: str, obj: dict) -> None:
+    def put_json(self, path: str, obj: dict, *, if_match: str | None = None,
+                 if_none_match: str | None = None) -> None:
         # SDK put.ts: PUT getApiUrl('/?pathname=…') with options as x-* headers
         # only (putOptionHeaderMap). Extra query keys made production answer
         # 400 Invalid pathname. Keep the store private.
+        # putOptionHeaderMap.ifMatch → x-if-match (API v13). Create uses
+        # x-if-none-match: * so two first-writers cannot both succeed.
         pathname = _norm(path)
         body = json.dumps(obj, separators=(",", ":")).encode()
         qs = urlencode({"pathname": pathname})
+        extra = {
+            "x-vercel-blob-access": "private",
+            "x-content-type": "application/json",
+            "x-add-random-suffix": "0",
+            "x-allow-overwrite": "1",
+            "x-cache-control-max-age": "0",
+            "Content-Type": "application/json",
+        }
+        if if_match:
+            extra["x-if-match"] = str(if_match).strip('"')
+        if if_none_match:
+            extra["x-if-none-match"] = str(if_none_match)
         req = urllib.request.Request(
             self.base_url + "/?" + qs,
             data=body,
             method="PUT",
-            headers=self._headers({
-                "x-vercel-blob-access": "private",
-                "x-content-type": "application/json",
-                "x-add-random-suffix": "0",
-                "x-allow-overwrite": "1",
-                "x-cache-control-max-age": "0",
-                "Content-Type": "application/json",
-            }),
+            headers=self._headers(extra),
         )
-        status, raw, _ = self._open(req)
+        status, raw, headers = self._open(req)
+        if status == 412:
+            raise StaleWrite(pathname)
         if status not in (200, 201):
             _raise_blob("put", status, raw)
+        etag = _header(headers, "etag") or _etag_from_body(raw)
+        if etag:
+            self._etags[pathname] = etag
 
     def get_json(self, path: str) -> Optional[dict]:
         # Private reads: {storeId}.private.blob.vercel-storage.com + Bearer.
@@ -262,13 +344,17 @@ class BlobStore(Storage):
             method="GET",
             headers=self._headers(),
         )
-        status, raw, _ = self._open(req)
+        status, raw, headers = self._open(req)
         if status in (404, 400):
+            self._etags.pop(pathname, None)
             return None
         if status != 200:
             _raise_blob("get", status, raw)
         if not raw:
             return None
+        etag = _header(headers, "etag") or _etag_from_body(raw)
+        if etag:
+            self._etags[pathname] = etag
         return json.loads(raw.decode())
 
     def delete(self, path: str) -> None:
@@ -315,6 +401,28 @@ class BlobStore(Storage):
                 break
         return sorted(out)
 
+    def put_json_if_current(self, path: str, obj: dict, expected_version: int) -> bool:
+        """CAS via object version plus Blob x-if-match / x-if-none-match."""
+        pathname = _norm(path)
+        current = self.get_json(path)
+        if current is not None:
+            have = int(current.get("version") or 0)
+            if have > int(expected_version or 0):
+                return False
+            if_match = self._etags.get(pathname)
+            if_none_match = None
+        else:
+            if_match = None
+            if_none_match = "*"
+        nxt = dict(obj)
+        nxt["version"] = int(expected_version or 0) + 1
+        try:
+            self.put_json(path, nxt, if_match=if_match, if_none_match=if_none_match)
+        except StaleWrite:
+            return False
+        obj["version"] = nxt["version"]
+        return True
+
     def _object_url(self, pathname: str) -> str:
         # SDK get.ts constructBlobUrl: {storeId}.private.blob.vercel-storage.com
         # for private reads. Emulators / fake servers keep the override origin.
@@ -339,6 +447,37 @@ def _raise_blob(op: str, status, raw) -> None:
 
 def _norm(path: str) -> str:
     return str(path or "").lstrip("/")
+
+
+def _header(headers, name: str) -> str:
+    if not headers:
+        return ""
+    want = name.lower()
+    if hasattr(headers, "get"):
+        for key in (name, name.title(), name.upper(), want):
+            val = headers.get(key)
+            if val:
+                return str(val).strip().strip('"')
+        try:
+            items = headers.items()
+        except Exception:
+            items = []
+        for key, val in items:
+            if str(key).lower() == want and val:
+                return str(val).strip().strip('"')
+    return ""
+
+
+def _etag_from_body(raw) -> str:
+    if not raw:
+        return ""
+    try:
+        data = json.loads(raw.decode() if isinstance(raw, (bytes, bytearray)) else raw)
+    except Exception:
+        return ""
+    if isinstance(data, dict):
+        return str(data.get("etag") or data.get("ETag") or "").strip().strip('"')
+    return ""
 
 
 def _blob_store_id(token: str) -> str:
