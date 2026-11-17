@@ -8,12 +8,12 @@ import pytest
 
 from flightcheck.check import check_flight, parse_request
 from flightcheck.events import deliver_webhook
-from flightcheck.exceptions import BudgetExceeded, Conflict, InvalidBudget, IsolationError
+from flightcheck.exceptions import BudgetExceeded, Conflict, InvalidBudget, IsolationError, WebhookNotAllowed
 from flightcheck.mode import fixture_fetch
 from flightcheck.model import parse_time
 from flightcheck.money import parse_money
 from flightcheck.routes import handle_tick, handle_track, handle_tracked
-from flightcheck.store import MemoryStore, namespaced_store
+from flightcheck.store import MemoryStore, namespaced_store, use_store
 from flightcheck.track import (
     load_track,
     reserve_spend,
@@ -433,3 +433,122 @@ def test_onward_reason_untracked_and_not_found():
     )
     assert missing.connection is None
     assert missing.connection_reason == "not_found"
+
+
+def _http_track(monkeypatch, body, extra_headers=None):
+    monkeypatch.setenv("FLIGHTCHECK_TOKEN", TOKEN)
+    monkeypatch.setenv("FLIGHTCHECK_STORAGE", "memory")
+    monkeypatch.delenv("BLOB_READ_WRITE_TOKEN", raising=False)
+    from flightcheck.store import reset_process_memory, use_store
+
+    store = reset_process_memory()
+    use_store(store)
+    headers = {"Authorization": f"Bearer {TOKEN}", "X-Flightcheck-Mode": "fixtures"}
+    if extra_headers:
+        headers.update(extra_headers)
+    status, payload = handle_track("POST", headers, {}, body, path="/api/track")
+    return status, payload, store
+
+
+def test_track_rejects_nan_budget_with_400(monkeypatch):
+    status, payload, store = _http_track(monkeypatch, {
+        "flight": "XX123",
+        "date": "2027-03-15",
+        "origin": "XXA",
+        "webhook_url": "https://example.test/hook",
+        "budget": "NaN",
+        "now": NEAR_DEP,
+    })
+    assert status == 400
+    assert payload["error"]["code"] == "bad_request"
+    assert store.list_prefix("fixtures/tracks/") == []
+    use_store(None)
+
+
+def test_track_zero_budget_is_402_and_creates_no_track(monkeypatch):
+    status, payload, store = _http_track(monkeypatch, {
+        "flight": "XX123",
+        "date": "2027-03-15",
+        "origin": "XXA",
+        "webhook_url": "https://example.test/hook",
+        "budget": 0,
+        "now": NEAR_DEP,
+    })
+    assert status == 402, payload
+    assert payload["error"]["code"] == "budget_exceeded"
+    assert store.list_prefix("fixtures/tracks/") == []
+    use_store(None)
+
+
+def test_track_applies_request_budget_to_registration_lookup():
+    store = MemoryStore()
+    calls = []
+
+    def fetch(path, params):
+        calls.append(path)
+        return scenario_fetch()(path, params)
+
+    with pytest.raises(BudgetExceeded):
+        start_track(
+            _payload(budget=0.001),
+            store=store,
+            now=parse_time(NEAR_DEP),
+            fetch=fetch,
+            deliver=lambda *a, **k: {"ok": True},
+            webhook_secret="whsec",
+        )
+    assert calls == []
+    assert store.list_prefix("tracks/") == []
+
+
+def test_track_rejects_http_and_unknown_webhook_host(monkeypatch):
+    status, payload, store = _http_track(monkeypatch, {
+        "flight": "XX123",
+        "date": "2027-03-15",
+        "origin": "XXA",
+        "webhook_url": "http://example.test/hook",
+        "now": "2027-03-14T18:00:00Z",
+    })
+    assert status == 400
+    assert payload["error"]["code"] == "webhook_not_allowed"
+    assert store.list_prefix("fixtures/tracks/") == []
+
+    status, payload, store = _http_track(monkeypatch, {
+        "flight": "XX123",
+        "date": "2027-03-15",
+        "origin": "XXA",
+        "webhook_url": "https://evil.example/hook",
+        "now": "2027-03-14T18:00:00Z",
+    })
+    assert status == 400
+    assert payload["error"]["code"] == "webhook_not_allowed"
+    use_store(None)
+
+
+def test_track_allows_vercel_production_host(monkeypatch):
+    monkeypatch.setenv("FLIGHTCHECK_WEBHOOK_ALLOWED_HOSTS", "")
+    monkeypatch.setenv("VERCEL_PROJECT_PRODUCTION_URL", "https://journey-flight-check.vercel.app")
+    monkeypatch.delenv("VERCEL_ENV", raising=False)
+    status, payload, store = _http_track(monkeypatch, {
+        "flight": "XX123",
+        "date": "2027-03-15",
+        "origin": "XXA",
+        "webhook_url": "https://journey-flight-check.vercel.app/api/webhook-sink",
+        "now": "2027-03-14T18:00:00Z",
+        "ref": "prod-host",
+    })
+    assert status == 200, payload
+    assert payload.get("tracking_id")
+    use_store(None)
+
+
+def test_library_require_webhook_url():
+    with pytest.raises(WebhookNotAllowed):
+        start_track(
+            _payload(webhook_url="https://not-allowed.example/hook"),
+            store=MemoryStore(),
+            now=NOW,
+            fetch=scenario_fetch(),
+            deliver=lambda *a, **k: {"ok": True},
+            webhook_secret="x",
+        )

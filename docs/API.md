@@ -82,6 +82,10 @@ Success: `ok`, `status`, `band`, `summary`, `flight`, `prediction`, `next_check_
 
 Start tracking. Lookup key is ident+date+origin+webhook. An exact retry returns `idempotent: true` and the existing `tracking_id`. A retry that changes `ref`, onward flight, policy/cadence or `alert_delay_min` returns **409 `conflict`** instead of silently keeping the old configuration. Untrack and re-register to replace. Auth: token.
 
+`budget` / `budget_usd` use the same helper as `/api/check`: finite nonnegative, `NaN`/`Infinity` → **400 `bad_request`**, `0` means no paid registration lookup (**402 `budget_exceeded`** when a lookup would be required). HTTP clamps the per-request cap at `$0.50`. The daily cap still applies.
+
+`webhook_url` must be HTTPS, and its host must be in `FLIGHTCHECK_WEBHOOK_ALLOWED_HOSTS` or the Vercel production host (`VERCEL_PROJECT_PRODUCTION_URL`). Otherwise **400 `webhook_not_allowed`** — a track is not created. Loopback HTTP is allowed only on a local process (`VERCEL_ENV` unset).
+
 ```bash
 curl -sS -H "Authorization: Bearer $FLIGHTCHECK_TOKEN" \
   -H "Content-Type: application/json" \
@@ -187,6 +191,7 @@ Static operator console (`public/test/index.html`). The page itself has no API a
 | `budget_exceeded` | 402 | false | per-request or daily AeroAPI cap |
 | `conflict` | 409 | false | track retry with a different ref/onward/policy/threshold |
 | `forbidden` | 403 | false | fixture tracking against the live store |
+| `webhook_not_allowed` | 400 | false | `webhook_url` is not HTTPS or its host is not allowlisted |
 | `method_not_allowed` | 405 | false | wrong HTTP method |
 | `rate_limited` | 429 | true | AeroAPI 429 |
 | `timeout` | 200 | true | urlopen hang |

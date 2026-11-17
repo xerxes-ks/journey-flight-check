@@ -31,6 +31,7 @@ HTTP_FOR_CODE = {
     "storage_not_configured": 503,
     "storage_error": 503,
     "forbidden": 403,
+    "webhook_not_allowed": 400,
 }
 
 
@@ -110,6 +111,13 @@ class IsolationError(CheckError):
 
     def __init__(self, message: str = "fixture tracking cannot use the live store"):
         super().__init__(message, code="forbidden", http_status=403)
+
+
+class WebhookNotAllowed(CheckError):
+    """webhook_url is not HTTPS or its host is not on the allowlist."""
+
+    def __init__(self, message: str = "webhook_url is not allowed"):
+        super().__init__(message, code="webhook_not_allowed", http_status=400)
 
 
 class InvalidDate(CheckError):

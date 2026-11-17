@@ -11,6 +11,7 @@ from .model import DEFAULT_BUDGET_USD, DEFAULT_COST_PER_CALL
 MAX_BUDGET_USD = 50.0
 MAX_DAILY_BUDGET_USD = 50.0
 MAX_COST_PER_CALL = 1.0
+HTTP_BUDGET_CAP = 0.50
 
 _NON_FINITE_NAMES = {
     "nan", "+nan", "-nan",
@@ -55,6 +56,22 @@ def parse_money(
     if number > cap:
         return cap
     return number
+
+
+def request_budget(
+    data: dict,
+    default: float = DEFAULT_BUDGET_USD,
+    *,
+    max_value: float = MAX_BUDGET_USD,
+) -> float:
+    """Read budget_usd or budget from a request mapping. Missing yields *default*."""
+    if "budget_usd" in data:
+        raw = data.get("budget_usd")
+    elif "budget" in data:
+        raw = data.get("budget")
+    else:
+        raw = None
+    return parse_money(raw, default, max_value=max_value, field="budget")
 
 
 def finite_unit_price(value: Any, default: float = DEFAULT_COST_PER_CALL) -> float:

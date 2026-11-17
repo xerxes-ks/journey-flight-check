@@ -59,6 +59,8 @@ paths:
           description: Unauthorized
         "409":
           description: conflict — same subscriber, different ref/onward/policy/threshold
+        "400":
+          description: bad_request or webhook_not_allowed
         "402":
           description: budget_exceeded
         "503":
@@ -258,7 +260,8 @@ components:
         flight: {type: string}
         date: {type: string}
         origin: {type: string}
-        webhook_url: {type: string}
+        webhook_url: {type: string, description: HTTPS URL whose host is allowlisted or the Vercel production host}
+        budget_usd: {type: number, minimum: 0, description: Same as /api/check; 0 means zero paid calls}
         ref: {type: string}
         now: {type: string, description: fixtures only}
         cadence: {type: string}

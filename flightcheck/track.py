@@ -11,10 +11,10 @@ from typing import Optional
 
 from . import check as check_mod
 from .cadence import CHECKPOINTS
-from .events import deliver_webhook, detect_events, event_payload
+from .events import deliver_webhook, detect_events, event_payload, require_webhook_url
 from .exceptions import BudgetExceeded, Conflict, IsolationError, error_dict
-from .model import UTC, normalize_ident, parse_date, parse_time
-from .money import MAX_DAILY_BUDGET_USD, parse_money
+from .model import UTC, DEFAULT_BUDGET_USD, normalize_ident, parse_date, parse_time
+from .money import HTTP_BUDGET_CAP, MAX_DAILY_BUDGET_USD, parse_money, request_budget
 from .store import (
     EVENTS_MAX,
     FIXTURE_NAMESPACE,
@@ -243,6 +243,7 @@ def start_track(
     date = parse_date(date).isoformat()
     if not webhook:
         raise ValueError("webhook_url is required")
+    per_request = min(request_budget(data, DEFAULT_BUDGET_USD), HTTP_BUDGET_CAP)
     ns = namespace or LIVE_NAMESPACE
     _assert_isolation(fetch, ns)
     store = namespaced_store(store or get_store(), ns)
@@ -261,6 +262,7 @@ def start_track(
         raise Conflict(
             "subscription already exists with a different ref, onward, policy or threshold"
         )
+    require_webhook_url(webhook)
     tid = new_tracking_id()
     rec = {
         "tracking_id": tid,
@@ -294,6 +296,7 @@ def start_track(
     result = _run_check(
         rec, now=now, fetch=fetch,
         spend_guard=_spend_guard(store, now, cap),
+        budget_usd=per_request,
     )
     err = getattr(result, "error", None) or {}
     cost = float(getattr(result, "cost_usd_est", 0) or 0)
@@ -333,7 +336,7 @@ def list_tracks(*, store: Storage | None = None, namespace: str | None = None) -
     return out
 
 
-def _run_check(rec: dict, *, now: dt.datetime, fetch=None, adapter=None, spend_guard=None):
+def _run_check(rec: dict, *, now: dt.datetime, fetch=None, adapter=None, spend_guard=None, budget_usd=None):
     payload = {
         "flight": rec["flight"],
         "date": rec["date"],
@@ -347,6 +350,8 @@ def _run_check(rec: dict, *, now: dt.datetime, fetch=None, adapter=None, spend_g
     }
     if rec.get("onward"):
         payload["onward"] = rec["onward"]
+    if budget_usd is not None:
+        payload["budget_usd"] = budget_usd
     return check_mod.check_flight(
         payload, fetch=fetch, adapter=adapter, now=now, spend_guard=spend_guard,
     )
