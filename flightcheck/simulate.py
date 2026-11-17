@@ -269,8 +269,9 @@ def run_simulate(data: dict) -> dict:
     captured: list[dict] = []
 
     def deliver(url, payload, secret, **_k):
+        # In-memory only. Never POST, never consult the webhook allowlist.
         captured.append(payload)
-        return {"ok": True, "http": 200, "attempts": 1}
+        return {"ok": True, "http": 200, "attempts": 1, "skipped": "simulate"}
 
     start_now = std - dt.timedelta(hours=30)
     if scenario == "upstream_outage":
@@ -284,7 +285,7 @@ def run_simulate(data: dict) -> dict:
             "flight": ident,
             "date": date,
             "origin": origin,
-            "webhook_url": "https://example.test/sink",
+            "webhook_url": "internal://simulate",
             "ref": data.get("ref") or "simulate",
             "alert_delay_min": data.get("alert_delay_min") or 45,
         },
@@ -293,6 +294,7 @@ def run_simulate(data: dict) -> dict:
         fetch=fetch0,
         deliver=deliver,
         webhook_secret="sim-secret",
+        validate_webhook=False,
     )
     start_rec = load_track(store, started["tracking_id"]) or {}
     start_snap = start_rec.get("last_snapshot") or {}

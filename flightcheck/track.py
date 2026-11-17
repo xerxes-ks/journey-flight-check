@@ -233,6 +233,7 @@ def start_track(
     webhook_secret: str | None = None,
     namespace: str | None = None,
     budget: float | None = None,
+    validate_webhook: bool = True,
 ) -> dict:
     now = now or dt.datetime.now(UTC)
     flight = data.get("flight") or data.get("ident")
@@ -262,7 +263,8 @@ def start_track(
         raise Conflict(
             "subscription already exists with a different ref, onward, policy or threshold"
         )
-    require_webhook_url(webhook)
+    if validate_webhook:
+        require_webhook_url(webhook)
     tid = new_tracking_id()
     rec = {
         "tracking_id": tid,
@@ -301,6 +303,8 @@ def start_track(
     err = getattr(result, "error", None) or {}
     cost = float(getattr(result, "cost_usd_est", 0) or 0)
     if err.get("code") == "budget_exceeded" and cost == 0:
+        if per_request <= 0:
+            raise BudgetExceeded("budget too small")
         raise BudgetExceeded("daily budget reached")
     _apply_result(
         store, rec, result, now=now, first=True,
@@ -509,7 +513,13 @@ def flush_pending(store: Storage, *, now: dt.datetime, deliver=None, webhook_sec
 
 
 def _send_webhook(url: str, payload: dict, secret: str, *, deliver=None) -> dict:
-    sender = deliver or deliver_webhook
+    if deliver is None:
+        scheme = str(url or "").split(":", 1)[0].lower()
+        if scheme not in ("http", "https"):
+            return {"ok": False, "http": 0, "attempts": 0, "skipped": "internal"}
+        sender = deliver_webhook
+    else:
+        sender = deliver
     try:
         out = sender(url, payload, secret)
     except Exception:
