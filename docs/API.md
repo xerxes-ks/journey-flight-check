@@ -172,7 +172,7 @@ Static operator console (`public/test/index.html`). The page itself has no API a
 | `bad_request` | 400 | false | missing fields, invalid JSON |
 | `invalid_date` | 400 | false | ticket `date` is not YYYY-MM-DD |
 | `not_found` | 404 | false | unknown tracking_id or AeroAPI 404 |
-| `origin_mismatch` | 404 | false | requested origin matches no returned leg |
+| `origin_mismatch` | 404 | false | requested origin matches no returned leg. Not evaluated on `too_early` (no AeroAPI call until T−24h), so a wrong origin still returns `too_early` until the first live lookup. |
 | `flight_not_found` | 200 | false | empty AeroAPI list (`flight not found`) |
 | `storage_not_configured` | 503 | false | no `BLOB_READ_WRITE_TOKEN` (and not redis/memory) |
 | `storage_error` | 503 | false | Blob config/permission failure (private store PUT without `x-vercel-blob-access`) |

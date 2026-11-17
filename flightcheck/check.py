@@ -530,6 +530,8 @@ def check_flight(req: CheckRequest | dict, *, fetch=None, adapter=None, now=None
     onward_ident = req.onward.ident if req.onward else None
     gate, tzname = too_early_gate(day, now, origin)
     if gate is not None:
+        # too_early makes no AeroAPI call, so origin cannot be matched against
+        # a live leg. origin_mismatch is evaluated on the first live lookup.
         flight = _skeleton(ident, req.date, origin, status="too_early", tzname=tzname)
         pred = predict(flight, alert_delay_min=req.alert_delay_min)
         nxt, minutes, checkpoint, attempts = _next_check(

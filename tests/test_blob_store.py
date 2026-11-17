@@ -11,6 +11,8 @@ import pytest
 
 from flightcheck.exceptions import StorageError
 from flightcheck.store import (
+    BLOB_API,
+    BLOB_API_VERSION,
     BlobStore,
     MemoryStore,
     RedisStore,
@@ -131,18 +133,72 @@ def test_blob_put_get_list_delete_private_no_cache(blob_server):
     put = next(x for x in methods if x[0] == "PUT")
     hdr = {k.lower(): v for k, v in put[2].items()}
     assert hdr.get("authorization", "").startswith("Bearer ")
-    assert hdr.get("x-api-version") == "7"
+    assert hdr.get("x-api-version") == "13"
     assert hdr.get("x-add-random-suffix") == "0"
     assert hdr.get("x-allow-overwrite") == "1"
     assert hdr.get("x-cache-control-max-age") == "0"
     assert hdr.get("x-vercel-blob-access") == "private"
-    assert "addRandomSuffix=false" in put[3]
+    qs = parse_qs(put[3])
+    assert set(qs) == {"pathname"}
+    assert qs["pathname"] == ["tracks/trk_ab.json"]
+    assert "addRandomSuffix" not in qs
     get = next(x for x in methods if x[0] == "GET" and "prefix=" not in x[1])
     assert {k.lower(): v for k, v in get[2].items()}.get("authorization", "").startswith("Bearer ")
     assert "cache=0" in get[1]
     store.delete("tracks/trk_ab.json")
     assert store.get_json("tracks/trk_ab.json") is None
     assert store.list_prefix("tracks/") == []
+
+
+def test_blob_put_pins_sdk_url_query_and_headers():
+    """PUT must match current @vercel/blob: vercel.com/api/blob, v13, pathname-only query."""
+    captured = []
+
+    def fetch(req):
+        captured.append(req)
+        return 200, b'{"pathname":"tracks/a.json"}', {"content-type": "application/json"}
+
+    store = BlobStore("vercel_blob_rw_teststore_secret", fetch=fetch)
+    store.put_json("tracks/a.json", {"ok": True})
+    assert len(captured) == 1
+    req = captured[0]
+    parsed = urlparse(req.get_full_url())
+    assert parsed.scheme == "https"
+    assert parsed.netloc == "vercel.com"
+    assert parsed.path == "/api/blob/"
+    qs = parse_qs(parsed.query)
+    assert set(qs) == {"pathname"}
+    assert qs["pathname"] == ["tracks/a.json"]
+    hdr = {k.lower(): v for k, v in req.header_items()}
+    assert req.get_method() == "PUT"
+    assert BLOB_API == "https://vercel.com/api/blob"
+    assert BLOB_API_VERSION == "13"
+    assert hdr.get("x-api-version") == "13"
+    assert hdr.get("x-vercel-blob-access") == "private"
+    assert hdr.get("x-add-random-suffix") == "0"
+    assert hdr.get("x-allow-overwrite") == "1"
+    assert hdr.get("x-content-type") == "application/json"
+    assert hdr.get("x-cache-control-max-age") == "0"
+    assert hdr.get("authorization", "").startswith("Bearer ")
+    assert hdr.get("x-vercel-blob-store-id") == "teststore"
+    assert "addRandomSuffix" not in parsed.query
+    assert "allowOverwrite" not in parsed.query
+    assert "cacheControlMaxAge" not in parsed.query
+    assert "access=" not in parsed.query
+
+
+def test_blob_get_on_prod_api_uses_private_host():
+    captured = []
+
+    def fetch(req):
+        captured.append(req)
+        return 404, b"", {}
+
+    store = BlobStore("vercel_blob_rw_teststore_secret", fetch=fetch)
+    assert store.get_json("tracks/a.json") is None
+    url = captured[0].get_full_url()
+    assert url.startswith("https://teststore.private.blob.vercel-storage.com/tracks/a.json")
+    assert "cache=0" in url
 
 
 def test_blob_put_without_access_header_is_storage_error(blob_server):
