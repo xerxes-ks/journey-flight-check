@@ -9,7 +9,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
 .venv/bin/python -m pytest
 ```
 
-Stdlib-only runtime. Tests inject AeroAPI `fetch` and a fake Blob HTTP server; CI never calls FlightAware or Vercel Blob. `tests/test_vercel_routes.py` asserts `[tool.vercel] entrypoint` is **`api.index:handler`** (not `api.check:handler`, which 401'd health and cron) and that `vercel.json` sets `maxDuration` 30 on the dispatcher plus the `/api/tick` cron. After a Vercel deploy, `.github/workflows/preview-health.yml` hits `/api/health` with `x-vercel-protection-bypass` when the `VERCEL_AUTOMATION_BYPASS_SECRET` GitHub secret is set.
+Stdlib-only runtime. Tests inject AeroAPI `fetch` and a fake Blob HTTP server; CI never calls FlightAware or Vercel Blob. `tests/test_vercel_routes.py` asserts `[tool.vercel] entrypoint` is **`api.index:handler`** (not `api.check:handler`, which 401'd health and cron) and that `vercel.json` sets `maxDuration` 30 on the dispatcher plus the `/api/tick` cron.
 
 ## Stdlib dev server
 
@@ -72,3 +72,18 @@ The **production alias** (`https://journey-flight-check.vercel.app`) is **public
 Self-webhook deliveries (`webhook_url=$BASE/api/webhook-sink`) from a preview also need that bypass; the function’s outbound POST has no SSO cookie. Local `python3 -m flightcheck.dev` and `vercel dev` do not have this gate.
 
 Share `FLIGHTCHECK_TOKEN` (and the bypass, for preview) out of band. Never put them in this public repo.
+
+## Verified deployment health
+
+The `preview-health` workflow probes when GitHub emits a successful `deployment_status` event, or when manually dispatched with both a deployment URL and expected 40-character commit SHA. Some Vercel integrations publish commit statuses without creating GitHub deployments, so the automatic event may never occur. In that case, dispatch **Actions → preview-health → Run workflow** with the exact approved deployment URL and deployed SHA, or run locally. For a
+protected preview, load the bypass into the environment from the approved secret
+store first; keep its value out of shell history and logs:
+
+
+```bash
+PREVIEW_URL=https://journey-flight-check.vercel.app \
+EXPECTED_SHA=<40-character-deployed-sha> \
+python3 scripts/preview_health.py
+```
+
+The checker accepts only the Journey flight project's canonical and preview Vercel hosts, requires HTTP 200 and a valid typed health payload, and compares the payload SHA when `EXPECTED_SHA` is set. It fails on blocked authentication, redirects, invalid responses, or SHA mismatch. A missing preview URL is a failure: a route-table check alone does not count as a successful probe. Automation secrets never appear in logs or response output. Share `FLIGHTCHECK_TOKEN` and the bypass out of band; never put them in this public repo.
