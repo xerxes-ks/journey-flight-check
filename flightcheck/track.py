@@ -7,56 +7,47 @@ import hashlib
 import os
 import uuid
 from typing import Optional
-from urllib.parse import urlparse
 
 from . import check as check_mod
 from .events import deliver_webhook, detect_events, event_payload
 from .exceptions import error_dict
 from .model import UTC, normalize_ident, parse_time
-from .store import (
-    EVENTS_MAX,
-    PREFIX,
-    SINK_MAX,
-    MemoryStore,
-    Store,
-    StorageNotConfigured,
-    get_store,
-    json_get,
-    json_set,
-)
+from .store import EVENTS_MAX, SINK_MAX, Storage, get_store
 
 DEFAULT_DAILY_BUDGET = 0.50
-TRACKS = PREFIX + "tracks"
-SINK = PREFIX + "sink"
 
 
-def _idemp_key(flight: str, date: str, origin: str | None, webhook_url: str) -> str:
+def _idemp_hash(flight: str, date: str, origin: str | None, webhook_url: str) -> str:
     raw = "|".join([
         normalize_ident(flight),
         str(date)[:10],
         (origin or "").upper(),
         (webhook_url or "").strip(),
     ])
-    return PREFIX + "idemp:" + hashlib.sha256(raw.encode()).hexdigest()[:24]
+    return hashlib.sha256(raw.encode()).hexdigest()[:24]
 
 
 def _group_key(flight: str, date: str, origin: str | None) -> str:
-    return PREFIX + "group:" + hashlib.sha256(
+    return hashlib.sha256(
         f"{normalize_ident(flight)}|{str(date)[:10]}|{(origin or '').upper()}".encode()
     ).hexdigest()[:24]
 
 
-def _track_key(tid: str) -> str:
-    return PREFIX + "track:" + tid
+def track_path(tid: str) -> str:
+    return f"tracks/{tid}.json"
 
 
-def _events_key(tid: str) -> str:
-    return PREFIX + "events:" + tid
+def event_path(tid: str, ts: str, seq: int) -> str:
+    return f"events/{tid}/{ts}-{seq}.json"
 
 
-def _budget_key(now: dt.datetime) -> str:
+def sink_path(ts: str, seq: int = 0) -> str:
+    return f"sink/{ts}-{seq}.json"
+
+
+def budget_path(now: dt.datetime) -> str:
     day = now.astimezone(UTC).strftime("%Y-%m-%d")
-    return PREFIX + "budget:" + day
+    return f"budget/{day}.json"
 
 
 def new_tracking_id() -> str:
@@ -70,38 +61,56 @@ def daily_budget() -> float:
     return float(raw)
 
 
-def spent_today(store: Store, now: dt.datetime) -> float:
-    raw = store.get(_budget_key(now))
-    return float(raw or 0)
+def spent_today(store: Storage, now: dt.datetime) -> float:
+    rec = store.get_json(budget_path(now)) or {}
+    return float(rec.get("spent") or 0)
 
 
-def add_spend(store: Store, now: dt.datetime, amount: float) -> float:
+def add_spend(store: Storage, now: dt.datetime, amount: float) -> float:
+    path = budget_path(now)
+    rec = store.get_json(path) or {"spent": 0.0, "version": 0}
     if amount <= 0:
-        return spent_today(store, now)
-    return store.incrbyfloat(_budget_key(now), float(amount))
+        return float(rec.get("spent") or 0)
+    expected = int(rec.get("version") or 0)
+    nxt = {"spent": round(float(rec.get("spent") or 0) + float(amount), 6), "version": expected}
+    if not store.put_json_if_current(path, nxt, expected):
+        rec = store.get_json(path) or rec
+        return float(rec.get("spent") or 0)
+    return float(nxt["spent"])
 
 
-def load_track(store: Store, tid: str) -> Optional[dict]:
-    return json_get(store, _track_key(tid))
+def load_track(store: Storage, tid: str) -> Optional[dict]:
+    return store.get_json(track_path(tid))
 
 
-def save_track(store: Store, rec: dict) -> None:
-    json_set(store, _track_key(rec["tracking_id"]), rec)
+def save_track(store: Storage, rec: dict) -> bool:
+    """Write track JSON. Skips if a newer version is already stored."""
+    tid = rec["tracking_id"]
+    expected = int(rec.get("version") or 0)
+    return store.put_json_if_current(track_path(tid), rec, expected)
 
 
-def append_event(store: Store, tid: str, payload: dict) -> None:
-    store.lpush(_events_key(tid), __import__("json").dumps(payload, separators=(",", ":")), maxlen=EVENTS_MAX)
+def append_event(store: Storage, tid: str, payload: dict) -> None:
+    ts = (payload.get("checked_at") or dt.datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"))
+    ts = str(ts).replace(":", "").replace("-", "")
+    existing = store.list_prefix(f"events/{tid}/")
+    seq = len(existing) + 1
+    store.put_json(event_path(tid, ts, seq), payload)
+    all_paths = store.list_prefix(f"events/{tid}/")
+    extra = all_paths[:-EVENTS_MAX] if len(all_paths) > EVENTS_MAX else []
+    for path in extra:
+        store.delete(path)
 
 
-def list_event_log(store: Store, tid: str) -> list[dict]:
-    import json
-    rows = store.lrange(_events_key(tid), 0, EVENTS_MAX)
+def list_event_log(store: Storage, tid: str) -> list[dict]:
+    paths = store.list_prefix(f"events/{tid}/")
     out = []
-    for raw in rows:
-        try:
-            out.append(json.loads(raw))
-        except json.JSONDecodeError:
-            continue
+    for path in reversed(paths):
+        item = store.get_json(path)
+        if item:
+            out.append(item)
+        if len(out) >= EVENTS_MAX:
+            break
     return out
 
 
@@ -124,16 +133,24 @@ def public_track(rec: dict) -> dict:
     }
 
 
+def _find_idemp(store: Storage, flight, date, origin, webhook) -> Optional[dict]:
+    want = _idemp_hash(flight, date, origin, webhook)
+    for path in store.list_prefix("tracks/"):
+        rec = store.get_json(path)
+        if rec and rec.get("idemp") == want:
+            return rec
+    return None
+
+
 def start_track(
     data: dict,
     *,
-    store: Store | None = None,
+    store: Storage | None = None,
     now: dt.datetime | None = None,
     fetch=None,
     deliver=None,
     webhook_secret: str | None = None,
 ) -> dict:
-    store = store or get_store()
     now = now or dt.datetime.now(UTC)
     flight = data.get("flight") or data.get("ident")
     date = data.get("date")
@@ -142,19 +159,17 @@ def start_track(
         raise ValueError("flight and date are required")
     if not webhook:
         raise ValueError("webhook_url is required")
+    store = store or get_store()
     origin = (str(data["origin"]).upper() if data.get("origin") else None)
-    idemp = _idemp_key(flight, date, origin, webhook)
-    existing_id = store.get(idemp)
-    if existing_id:
-        rec = load_track(store, existing_id)
-        if rec:
-            return {
-                "ok": True,
-                "idempotent": True,
-                "tracking_id": rec["tracking_id"],
-                "next_check_local": rec.get("next_check_local"),
-                "checkpoint": rec.get("checkpoint"),
-            }
+    existing = _find_idemp(store, flight, date, origin, webhook)
+    if existing:
+        return {
+            "ok": True,
+            "idempotent": True,
+            "tracking_id": existing["tracking_id"],
+            "next_check_local": existing.get("next_check_local"),
+            "checkpoint": existing.get("checkpoint"),
+        }
     tid = new_tracking_id()
     rec = {
         "tracking_id": tid,
@@ -178,10 +193,9 @@ def start_track(
         "fail_count": 0,
         "ended": False,
         "previous_gate": None,
+        "idemp": _idemp_hash(flight, date, origin, webhook),
+        "version": 0,
     }
-    store.set(idemp, tid)
-    store.sadd(TRACKS, tid)
-    store.sadd(_group_key(rec["flight"], rec["date"], rec["origin"]), tid)
     result = _run_check(rec, now=now, fetch=fetch)
     _apply_result(
         store, rec, result, now=now, first=True,
@@ -196,23 +210,20 @@ def start_track(
     }
 
 
-def untrack(tid: str, *, store: Store | None = None) -> dict:
+def untrack(tid: str, *, store: Storage | None = None) -> dict:
     store = store or get_store()
     rec = load_track(store, tid)
     if not rec:
         return {"ok": False, "error": error_dict("not_found", "tracking_id not found")}
-    store.srem(TRACKS, tid)
-    store.srem(_group_key(rec["flight"], rec["date"], rec["origin"]), tid)
-    store.delete(_idemp_key(rec["flight"], rec["date"], rec["origin"], rec["webhook_url"]))
-    store.delete(_track_key(tid))
+    store.delete(track_path(tid))
     return {"ok": True, "tracking_id": tid}
 
 
-def list_tracks(*, store: Store | None = None) -> list[dict]:
+def list_tracks(*, store: Storage | None = None) -> list[dict]:
     store = store or get_store()
     out = []
-    for tid in store.smembers(TRACKS):
-        rec = load_track(store, tid)
+    for path in store.list_prefix("tracks/"):
+        rec = store.get_json(path)
         if rec:
             out.append(public_track(rec))
     out.sort(key=lambda r: (r.get("date") or "", r.get("flight") or ""))
@@ -252,7 +263,7 @@ def _next_at_utc(result: dict, now: dt.datetime) -> Optional[str]:
 
 
 def _apply_result(
-    store: Store,
+    store: Storage,
     rec: dict,
     result,
     *,
@@ -263,6 +274,11 @@ def _apply_result(
     charge: bool = True,
 ) -> list[str]:
     data = result.to_dict() if hasattr(result, "to_dict") else dict(result)
+    fresh = load_track(store, rec["tracking_id"])
+    if fresh and int(fresh.get("version") or 0) > int(rec.get("version") or 0):
+        rec.clear()
+        rec.update(fresh)
+        return []
     prev = rec.get("last_snapshot")
     err = data.get("error") or {}
     if err.get("retryable"):
@@ -281,7 +297,8 @@ def _apply_result(
     rec["ended"] = bool(data.get("final"))
     gate = ((data.get("flight") or {}).get("gate_origin")) or rec.get("previous_gate")
     rec["previous_gate"] = gate
-    save_track(store, rec)
+    if not save_track(store, rec):
+        return []
     if charge:
         add_spend(store, now, float(data.get("cost_usd_est") or 0))
     secret = webhook_secret if webhook_secret is not None else os.environ.get("FLIGHTCHECK_WEBHOOK_SECRET") or ""
@@ -309,7 +326,7 @@ class _LookupCache:
 
     @property
     def spent(self):
-        return float(getattr(self.inner, "spent", 0.0))
+        return float(getattr(self.inner, "spent", 0.0) or 0)
 
     def lookup(self, ident, date, **kw):
         key = (normalize_ident(ident), str(date)[:10], (kw.get("origin") or ""), bool(kw.get("fetch_inbound")))
@@ -330,7 +347,7 @@ class _LookupCache:
 
 def tick(
     *,
-    store: Store | None = None,
+    store: Storage | None = None,
     now: dt.datetime | None = None,
     fetch=None,
     deliver=None,
@@ -341,8 +358,8 @@ def tick(
     now = (now or dt.datetime.now(UTC)).astimezone(UTC)
     cap = daily_budget() if budget is None else float(budget)
     due: list[dict] = []
-    for tid in store.smembers(TRACKS):
-        rec = load_track(store, tid)
+    for path in store.list_prefix("tracks/"):
+        rec = store.get_json(path)
         if not rec or rec.get("ended"):
             continue
         nxt = rec.get("next_check_at")
@@ -399,18 +416,25 @@ def tick(
     }
 
 
-def push_sink(store: Store, item: dict) -> None:
-    import json
-    store.lpush(SINK, json.dumps(item, separators=(",", ":")), maxlen=SINK_MAX)
+def push_sink(store: Storage, item: dict) -> None:
+    ts = (item.get("received_at") or dt.datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"))
+    stamp = str(ts).replace(":", "").replace("-", "")
+    existing = store.list_prefix("sink/")
+    seq = len(existing) + 1
+    store.put_json(sink_path(stamp, seq), item)
+    all_paths = store.list_prefix("sink/")
+    extra = all_paths[:-SINK_MAX] if len(all_paths) > SINK_MAX else []
+    for path in extra:
+        store.delete(path)
 
 
-def list_sink(store: Store | None = None) -> list[dict]:
-    import json
+def list_sink(store: Storage | None = None) -> list[dict]:
     store = store or get_store()
     out = []
-    for raw in store.lrange(SINK, 0, SINK_MAX):
-        try:
-            out.append(json.loads(raw))
-        except json.JSONDecodeError:
-            continue
+    for path in reversed(store.list_prefix("sink/")):
+        item = store.get_json(path)
+        if item:
+            out.append(item)
+        if len(out) >= SINK_MAX:
+            break
     return out

@@ -1,0 +1,253 @@
+openapi: 3.0.3
+info:
+  title: flightcheck
+  version: 0.1.0
+  description: >
+    Stateless flight check plus service-owned tracking. Synthetic fixtures
+    XX123 / YY456 / XX754. Preview hosts may sit behind Vercel Authentication.
+servers:
+  - url: '{base}'
+    variables:
+      base:
+        default: http://127.0.0.1:8000
+paths:
+  /api/health:
+    get:
+      summary: Public readiness
+      security: []
+      responses:
+        "200":
+          description: Booleans only; never secret values
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+  /api/check:
+    post:
+      summary: Stateless check
+      security: [{bearerAuth: []}]
+      parameters:
+        - $ref: "#/components/parameters/FixtureMode"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CheckRequest"
+      responses:
+        "200":
+          description: Check result or structured error
+        "401":
+          description: Unauthorized
+  /api/track:
+    post:
+      summary: Start tracking (idempotent)
+      security: [{bearerAuth: []}]
+      parameters:
+        - $ref: "#/components/parameters/FixtureMode"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TrackRequest"
+      responses:
+        "200":
+          description: tracking_id
+        "401":
+          description: Unauthorized
+        "503":
+          description: storage_not_configured
+    delete:
+      summary: Stop tracking via query id
+      security: [{bearerAuth: []}]
+      parameters:
+        - name: id
+          in: query
+          schema: {type: string}
+      responses:
+        "200":
+          description: ok
+  /api/track/{id}:
+    delete:
+      summary: Stop tracking
+      security: [{bearerAuth: []}]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        "200":
+          description: ok
+  /api/untrack:
+    post:
+      summary: Stop tracking
+      security: [{bearerAuth: []}]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                tracking_id: {type: string}
+      responses:
+        "200":
+          description: ok
+  /api/tracked:
+    get:
+      summary: List tracks
+      security: [{bearerAuth: []}]
+      responses:
+        "200":
+          description: tracks
+  /api/tracked/{id}/events:
+    get:
+      summary: Event log
+      security: [{bearerAuth: []}]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        "200":
+          description: events newest first
+        "404":
+          description: not_found
+  /api/tick:
+    get:
+      summary: Run due checkpoints (Vercel Cron)
+      security: [{bearerAuth: []}, {cronAuth: []}]
+      parameters:
+        - $ref: "#/components/parameters/FixtureMode"
+        - name: now
+          in: query
+          schema: {type: string}
+      responses:
+        "200":
+          description: tick summary
+    post:
+      summary: Run due checkpoints
+      security: [{bearerAuth: []}, {cronAuth: []}]
+      parameters:
+        - $ref: "#/components/parameters/FixtureMode"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                now: {type: string, description: ISO; fixtures only}
+      responses:
+        "200":
+          description: tick summary
+  /api/simulate:
+    get:
+      summary: List scenario names
+      security: [{bearerAuth: []}]
+      responses:
+        "200":
+          description: scenarios
+    post:
+      summary: Zero-cost cadence replay
+      security: [{bearerAuth: []}]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                scenario: {type: string}
+                flight: {type: string}
+                date: {type: string}
+                origin: {type: string}
+                std_local: {type: string}
+      responses:
+        "200":
+          description: timeline
+  /api/webhook-sink:
+    get:
+      summary: Recent deliveries
+      security: [{bearerAuth: []}]
+      responses:
+        "200":
+          description: deliveries
+    post:
+      summary: Capture a signed webhook
+      security: [{webhookHmac: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: "{ok, signature_ok}"
+  /test:
+    get:
+      summary: Operator console (static HTML)
+      security: []
+      responses:
+        "200":
+          description: HTML
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+    cronAuth:
+      type: http
+      scheme: bearer
+      description: CRON_SECRET
+    webhookHmac:
+      type: apiKey
+      in: header
+      name: X-Flightcheck-Signature
+  parameters:
+    FixtureMode:
+      name: X-Flightcheck-Mode
+      in: header
+      required: false
+      schema:
+        type: string
+        enum: [fixtures]
+  schemas:
+    Health:
+      type: object
+      properties:
+        ok: {type: boolean}
+        version: {type: string}
+        sha: {type: string}
+        storage: {type: string, enum: [blob, memory, redis, none]}
+        aeroapi_key_configured: {type: boolean}
+        token_configured: {type: boolean}
+        webhook_secret_configured: {type: boolean}
+        cron_secret_configured: {type: boolean}
+        mode: {type: string, enum: [live, fixtures]}
+    CheckRequest:
+      type: object
+      required: [flight, date]
+      properties:
+        flight: {type: string}
+        date: {type: string}
+        origin: {type: string}
+        cadence: {type: string, enum: [essential, dense]}
+        now: {type: string, description: fixtures only}
+        onward: {type: object}
+    TrackRequest:
+      type: object
+      required: [flight, date, webhook_url]
+      properties:
+        flight: {type: string}
+        date: {type: string}
+        origin: {type: string}
+        webhook_url: {type: string}
+        ref: {type: string}
+        now: {type: string, description: fixtures only}
+        cadence: {type: string}
+        alert_delay_min: {type: integer}
+        onward: {type: object}
+security:
+  - bearerAuth: []

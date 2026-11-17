@@ -219,12 +219,13 @@ The service owns the recheck loop. Callers `POST /api/track` with ident, ticket 
 
 | Route | Auth | What |
 |---|---|---|
+| `GET /api/health` | none (app layer) | Readiness. Booleans only; `storage` is `blob`/`memory`/`redis`/`none`. Preview hosts may still be behind Vercel Authentication. |
 | `POST /api/check` | `FLIGHTCHECK_TOKEN` | Stateless check (unchanged). |
 | `POST /api/track` | `FLIGHTCHECK_TOKEN` | Start tracking. |
 | `DELETE /api/track/{id}` or `POST /api/untrack` | `FLIGHTCHECK_TOKEN` | Stop tracking. |
 | `GET /api/tracked` | `FLIGHTCHECK_TOKEN` | List tracks. |
 | `GET /api/tracked/{id}/events` | `FLIGHTCHECK_TOKEN` | Event log. |
-| `GET`/`POST /api/tick` | `CRON_SECRET` (Vercel cron every 5 min) | Run due checkpoints. One AeroAPI lookup per ident/date/origin group. Stops when the daily budget is exhausted. |
+| `GET`/`POST /api/tick` | `CRON_SECRET` or token (Vercel cron every 5 min) | Run due checkpoints. One AeroAPI lookup per ident/date/origin group. Stops when the daily budget is exhausted. Fixture `now` is honoured only in fixture mode. |
 | `POST /api/simulate` | `FLIGHTCHECK_TOKEN` | Zero-cost essential-cadence replay against synthetic fixtures. |
 | `POST /api/webhook-sink` | HMAC `X-Flightcheck-Signature` | Capture outbound events for `/test`. |
 | `GET /test` | browser | Operator console (token in localStorage). |
@@ -240,7 +241,12 @@ Outbound webhooks are HMAC-SHA256 of the raw body (`FLIGHTCHECK_WEBHOOK_SECRET`)
 | `FLIGHTCHECK_WEBHOOK_SECRET` | `X-Flightcheck-Signature` |
 | `CRON_SECRET` | `/api/tick` |
 | `FLIGHTCHECK_DAILY_BUDGET_USD` | Tick spend cap (default 0.50) |
-| `KV_REST_API_URL` + `KV_REST_API_TOKEN` (or Upstash `UPSTASH_REDIS_REST_*`) | Track store |
+| `BLOB_READ_WRITE_TOKEN` | Default private Blob store |
+| `FLIGHTCHECK_STORAGE` | `blob` (default) / `memory` / `redis` |
+| `FLIGHTCHECK_MODE` | `live` (default) / `fixtures` |
+| `KV_REST_API_URL` + `KV_REST_API_TOKEN` | Optional Redis, only if `FLIGHTCHECK_STORAGE=redis` |
+
+Contract: [`docs/API.md`](docs/API.md), [`openapi.yaml`](openapi.yaml). Tester walk: [`docs/TESTING.md`](docs/TESTING.md).
 
 ## Layout
 
@@ -252,10 +258,13 @@ Outbound webhooks are HMAC-SHA256 of the raw body (`FLIGHTCHECK_WEBHOOK_SECRET`)
 | `flightcheck/connections.py` | Connection-risk scoring |
 | `flightcheck/cadence.py` | Essential checkpoints + `poll_interval` |
 | `flightcheck/track.py` | Subscribe, tick, daily budget, lookup cache |
+| `flightcheck/store.py` | Blob / memory / optional Redis |
 | `flightcheck/cli.py` | `python -m flightcheck` (`--now` offline unless `--live`) |
-| `api/check.py` | Stateless Vercel Function |
+| `flightcheck/dev.py` | Stdlib threaded server (`python -m flightcheck.dev`) |
+| `api/check.py` / `api/health.py` | Stateless check + public health |
 | `api/track.py` / `api/tick.py` / `api/simulate.py` | Tracking + cron + replay |
 | `public/test/index.html` | `/test` console |
+| `scripts/smoke.sh` | Fixture walk against `$BASE` |
 | `schema/check_flight.tool.json` | Tiny tool input/output JSON Schema |
 
 ## Future work

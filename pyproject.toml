@@ -20,6 +20,9 @@ flightcheck = "flightcheck.cli:main"
 [tool.setuptools.packages.find]
 include = ["flightcheck*"]
 
+[tool.setuptools.package-data]
+flightcheck = ["fixtures/aeroapi/*.json"]
+
 [tool.vercel]
 entrypoint = "api.check:handler"
 

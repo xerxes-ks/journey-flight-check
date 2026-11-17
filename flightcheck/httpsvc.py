@@ -61,11 +61,13 @@ def make_handler(handle_fn, name: str = "api"):
         def log_message(self, fmt, *args):
             sys.stderr.write("%s %s\n" % (name, fmt % args))
 
-        def _read_json(self):
+        def _read_raw(self):
             length = int(self.headers.get("Content-Length") or 0)
             if length <= 0:
-                return {}
-            raw = self.rfile.read(length)
+                return b""
+            return self.rfile.read(length)
+
+        def _parse_json(self, raw: bytes):
             if not raw:
                 return {}
             try:
@@ -82,22 +84,26 @@ def make_handler(handle_fn, name: str = "api"):
             self.end_headers()
             self.wfile.write(blob)
 
-        def _run(self, method, body):
+        def _run(self, method, body, raw=b""):
             if body is None:
                 self._send(400, {"ok": False, "error": error_dict("bad_request", "invalid JSON")})
                 return
             query = parse_query(self.path)
-            status, payload = handle_fn(method, dict(self.headers), query, body, path=self.path)
+            status, payload = handle_fn(
+                method, dict(self.headers), query, body, path=self.path, raw=raw,
+            )
             self._send(status, payload)
 
         def do_GET(self):
-            self._run("GET", {})
+            self._run("GET", {}, b"")
 
         def do_POST(self):
-            self._run("POST", self._read_json())
+            raw = self._read_raw()
+            self._run("POST", self._parse_json(raw), raw)
 
         def do_DELETE(self):
-            self._run("DELETE", self._read_json() or {})
+            raw = self._read_raw()
+            self._run("DELETE", self._parse_json(raw) or {}, raw)
 
         def do_OPTIONS(self):
             self.send_response(204)
