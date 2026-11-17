@@ -10,7 +10,7 @@
     "properties": {
       "flight": {
         "type": "string",
-        "description": "Flight number as printed (IATA or ICAO), e.g. XX754. Spaces and case are ignored.",
+        "description": "Flight number as printed (IATA or ICAO), e.g. XX321. Spaces and case are ignored.",
         "minLength": 2
       },
       "date": {
@@ -175,7 +175,7 @@
         "tz": { "type": "string", "description": "IANA timezone name of the relevant airport." },
         "human": {
           "type": "string",
-          "description": "Short form such as '02:55 Sun 13 Dec (DEL time)'."
+          "description": "Short form such as '11:20 Tue 9 Mar (XXC time)'."
         }
       }
     },

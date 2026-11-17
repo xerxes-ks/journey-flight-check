@@ -1,6 +1,6 @@
 # Testing
 
-Synthetic flights only (`XX123`, `YY456`, `XX754`). No live trip data, no secrets in the repo.
+Synthetic flights only (`XX123`, `YY456`, `XX321`). No live trip data, no secrets in the repo.
 
 ## pytest
 
@@ -9,7 +9,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
 .venv/bin/python -m pytest
 ```
 
-Stdlib-only runtime. Tests inject AeroAPI `fetch` and a fake Blob HTTP server; CI never calls FlightAware or Vercel Blob.
+Stdlib-only runtime. Tests inject AeroAPI `fetch` and a fake Blob HTTP server; CI never calls FlightAware or Vercel Blob. `tests/test_vercel_routes.py` asserts there is **no** `[tool.vercel] entrypoint` (that bug served every `/api/*` path with `api/check.py`) and that each `api/*.py` function plus the `/api/tick` cron is declared. After a Vercel deploy, `.github/workflows/preview-health.yml` hits `/api/health` with `x-vercel-protection-bypass` when the `VERCEL_AUTOMATION_BYPASS_SECRET` GitHub secret is set.
 
 ## Stdlib dev server
 

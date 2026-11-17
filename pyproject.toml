@@ -23,8 +23,10 @@ include = ["flightcheck*"]
 [tool.setuptools.package-data]
 flightcheck = ["fixtures/aeroapi/*.json"]
 
-[tool.vercel]
-entrypoint = "api.check:handler"
+# Do NOT set [tool.vercel] entrypoint. That switch makes Vercel treat the
+# project as one Python app and serve every /api/* path with a single handler
+# (prod: api.check:handler, so /api/health and cron /api/tick returned 401).
+# Each api/*.py file is its own function (BaseHTTPRequestHandler `handler`).
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

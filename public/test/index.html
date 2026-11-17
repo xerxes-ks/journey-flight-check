@@ -11,7 +11,9 @@
     p.lead { color: #444; margin: 0 0 20px; }
     section { background: #fff; border: 1px solid #ddd; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
     label { display: block; font-size: 0.8rem; margin: 8px 0 4px; color: #333; }
+    label.inline { display: flex; align-items: center; gap: 8px; font-size: 0.95rem; }
     input, select, textarea { width: 100%; box-sizing: border-box; padding: 8px; font: inherit; }
+    input[type="checkbox"] { width: auto; }
     .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
     button { margin-top: 12px; margin-right: 8px; padding: 8px 14px; font: inherit; cursor: pointer; }
     pre { background: #111; color: #e8e8e8; padding: 12px; overflow: auto; font-size: 12px; border-radius: 6px; }
@@ -21,12 +23,33 @@
 </head>
 <body>
   <h1>flightcheck test console</h1>
-  <p class="lead">Synthetic flights only. Token stays in this browser. Simulate is zero-cost; Track calls AeroAPI if a key is configured.</p>
+  <p class="lead">Synthetic flights only. Token stays in this browser. Fixture mode is <strong>on by default</strong> so Check / Track / Tick do not call AeroAPI.</p>
 
   <section>
     <label>Bearer token (<code>FLIGHTCHECK_TOKEN</code>)</label>
     <input id="token" type="password" autocomplete="off" />
     <button type="button" id="saveToken">Save token</button>
+    <label class="inline">
+      <input id="fixtures" type="checkbox" checked />
+      Fixture mode (<code>X-Flightcheck-Mode: fixtures</code>) — default on
+    </label>
+  </section>
+
+  <section>
+    <h2>Check</h2>
+    <div class="row">
+      <div>
+        <label>Flight</label><input id="chkFlight" value="XX123" />
+        <label>Date</label><input id="chkDate" value="2027-03-15" />
+        <label>Origin</label><input id="chkOrigin" value="XXA" />
+      </div>
+      <div>
+        <label>now (ISO, fixtures only)</label>
+        <input id="chkNow" value="2027-03-14T18:00:00Z" />
+      </div>
+    </div>
+    <button type="button" id="doCheck">POST /api/check</button>
+    <pre id="chkOut">{}</pre>
   </section>
 
   <section>
@@ -85,12 +108,15 @@
     const $ = (id) => document.getElementById(id);
     const tokenKey = "flightcheck_token";
     $("token").value = localStorage.getItem(tokenKey) || "";
+    if (!$("trHook").value) $("trHook").value = location.origin + "/api/webhook-sink";
     $("saveToken").onclick = () => {
       localStorage.setItem(tokenKey, $("token").value.trim());
     };
     function headers() {
       const t = $("token").value.trim();
-      return { "Authorization": "Bearer " + t, "Content-Type": "application/json" };
+      const h = { "Authorization": "Bearer " + t, "Content-Type": "application/json" };
+      if ($("fixtures").checked) h["X-Flightcheck-Mode"] = "fixtures";
+      return h;
     }
     async function show(el, fn) {
       try {
@@ -111,6 +137,16 @@
       if (!res.ok) throw new Error(res.status + " " + JSON.stringify(body));
       return body;
     }
+    $("doCheck").onclick = () => show("chkOut", () => api("/api/check", {
+      method: "POST",
+      headers: headers(),
+      body: JSON.stringify({
+        flight: $("chkFlight").value,
+        date: $("chkDate").value,
+        origin: $("chkOrigin").value,
+        now: $("chkNow").value || undefined,
+      }),
+    }));
     $("runSim").onclick = () => show("simOut", async () => {
       const body = await api("/api/simulate", {
         method: "POST",
@@ -136,6 +172,7 @@
           origin: $("trOrigin").value,
           webhook_url: $("trHook").value,
           ref: $("trRef").value,
+          now: $("chkNow").value || undefined,
         }),
       });
       if (body.tracking_id) $("trId").value = body.tracking_id;
@@ -148,7 +185,11 @@
       headers: headers(),
       body: JSON.stringify({ tracking_id: $("trId").value }),
     }));
-    $("doTick").onclick = () => show("trOut", () => api("/api/tick", { method: "POST", headers: headers(), body: "{}" }));
+    $("doTick").onclick = () => show("trOut", () => api("/api/tick", {
+      method: "POST",
+      headers: headers(),
+      body: JSON.stringify({ now: $("chkNow").value || undefined }),
+    }));
   </script>
 </body>
 </html>

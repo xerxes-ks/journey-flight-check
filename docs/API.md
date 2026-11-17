@@ -9,7 +9,7 @@ export FLIGHTCHECK_TOKEN="…"
 
 Preview deployments may be behind **Vercel Authentication**. `curl` without a bypass cookie or `x-vercel-protection-bypass` header gets an HTML login page, not JSON. `GET /api/health` is unauthenticated at the app layer but still blocked by that gate. See `docs/TESTING.md`.
 
-Synthetic fixtures only: `XX123` / `YY456` / `XX754`. Never send live trip data.
+Synthetic fixtures only: `XX123` / `YY456` / `XX321`. Never send live trip data.
 
 ## Auth
 

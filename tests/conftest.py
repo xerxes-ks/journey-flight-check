@@ -104,8 +104,8 @@ def scenario_fetch(*, flight="xx123.json", inbound="xx122.json", onward="yy456.j
         "/flights/XXX122-1700000000-airline-0002": (200, load_fx(inbound)),
         "/flights/YY456": (200, load_fx(onward)),
         "/flights/YYY456": (200, load_fx(onward)),
-        "/flights/XX754": (200, load_fx("xx754-del.json")),
-        "/flights/XXX754": (200, load_fx("xx754-del.json")),
+        "/flights/XX321": (200, load_fx("xx321.json")),
+        "/flights/XXX321": (200, load_fx("xx321.json")),
     }, now=now)
 
 

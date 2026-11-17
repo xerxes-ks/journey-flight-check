@@ -18,7 +18,7 @@ When a webhook arrives, **relay `summary` as-is**. Do not convert times. Every t
   "impact_band": null,
   "summary": "XX123 LHR→SIN is worth watching. …",
   "times": {
-    "scheduled_out": { "human": "02:55 Sun 13 Dec (LHR time)", "local": "2027-12-13T02:55:00+00:00" }
+    "scheduled_out": { "human": "11:20 Tue 9 Mar (XXC time)", "local": "2027-03-09T11:20:00+13:00" }
   },
   "checked_at": "2027-12-12T23:55:00Z",
   "snapshot": {}

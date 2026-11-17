@@ -2,7 +2,7 @@
 
 Every public timestamp is an ISO-8601 string with the airport's offset,
 plus the IANA tz name and a short human form like
-'02:55 Sun 13 Dec (DEL time)'.
+'11:20 Tue 9 Mar (XXC time)'.
 """
 
 from __future__ import annotations

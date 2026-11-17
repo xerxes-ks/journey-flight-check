@@ -1,0 +1,90 @@
+{
+  "flights": [
+    {
+      "ident": "XXX321",
+      "ident_icao": "XXX321",
+      "ident_iata": "XX321",
+      "fa_flight_id": "XXX321-1700000900-airline-0009",
+      "operator": "XXX",
+      "operator_icao": "XXX",
+      "operator_iata": "XX",
+      "flight_number": "321",
+      "registration": "N321XX",
+      "inbound_fa_flight_id": null,
+      "cancelled": false,
+      "diverted": false,
+      "origin": {
+        "code": "XXC",
+        "code_icao": "XXC",
+        "code_iata": "XXC",
+        "timezone": "Pacific/Auckland",
+        "name": "Example Municipal",
+        "city": "Exampleton"
+      },
+      "destination": {
+        "code": "XXD",
+        "code_icao": "XXD",
+        "code_iata": "XXD",
+        "timezone": "Pacific/Honolulu",
+        "name": "Example Regional",
+        "city": "Sample City"
+      },
+      "scheduled_out": "2027-03-08T22:20:00Z",
+      "estimated_out": "2027-03-08T22:20:00Z",
+      "actual_out": null,
+      "scheduled_in": "2027-03-09T05:20:00Z",
+      "estimated_in": "2027-03-09T05:20:00Z",
+      "actual_in": null,
+      "status": "Scheduled",
+      "aircraft_type": "B788",
+      "baggage_claim": "12",
+      "gate_origin": "15",
+      "gate_destination": "11",
+      "terminal_origin": "3",
+      "terminal_destination": "1"
+    },
+    {
+      "ident": "XXX321",
+      "ident_icao": "XXX321",
+      "ident_iata": "XX321",
+      "fa_flight_id": "XXX321-1700000800-airline-0008",
+      "operator": "XXX",
+      "operator_icao": "XXX",
+      "operator_iata": "XX",
+      "flight_number": "321",
+      "registration": "N321XY",
+      "inbound_fa_flight_id": null,
+      "cancelled": false,
+      "diverted": false,
+      "origin": {
+        "code": "XXC",
+        "code_icao": "XXC",
+        "code_iata": "XXC",
+        "timezone": "Pacific/Auckland",
+        "name": "Example Municipal",
+        "city": "Exampleton"
+      },
+      "destination": {
+        "code": "XXD",
+        "code_icao": "XXD",
+        "code_iata": "XXD",
+        "timezone": "Pacific/Honolulu",
+        "name": "Example Regional",
+        "city": "Sample City"
+      },
+      "scheduled_out": "2027-03-07T22:20:00Z",
+      "estimated_out": "2027-03-07T22:20:00Z",
+      "actual_out": "2027-03-07T22:26:00Z",
+      "scheduled_in": "2027-03-08T05:20:00Z",
+      "estimated_in": "2027-03-08T05:27:00Z",
+      "actual_in": "2027-03-08T05:28:00Z",
+      "status": "Arrived",
+      "aircraft_type": "B788",
+      "baggage_claim": "12",
+      "gate_origin": "14",
+      "gate_destination": "11",
+      "terminal_origin": "3",
+      "terminal_destination": "1"
+    }
+  ]
+}

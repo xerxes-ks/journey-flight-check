@@ -9,14 +9,15 @@ from flightcheck import check_flight
 from flightcheck.model import parse_time
 from tests.conftest import load_fx, make_fetch
 
-STD = parse_time("2027-12-12T21:25:00Z")  # 02:55 IST on 13 Dec
-STA = parse_time("2027-12-13T04:55:00Z")
+# 11:20 NZDT on 9 Mar 2027 is 22:20 UTC on 8 Mar.
+STD = parse_time("2027-03-08T22:20:00Z")
+STA = parse_time("2027-03-09T05:20:00Z")
 
 
 def _evolving_fetch(now: dt.datetime):
-    body = deepcopy(load_fx("xx754-del.json"))
+    body = deepcopy(load_fx("xx321.json"))
     for f in body["flights"]:
-        if not str(f.get("fa_flight_id", "")).endswith("0013"):
+        if not str(f.get("fa_flight_id", "")).endswith("0009"):
             continue
         std = parse_time(f["scheduled_out"])
         sta = parse_time(f["scheduled_in"])
@@ -33,8 +34,8 @@ def _evolving_fetch(now: dt.datetime):
             f["actual_in"] = (sta + dt.timedelta(minutes=8)).strftime("%Y-%m-%dT%H:%M:%SZ")
             f["status"] = "Arrived"
     return make_fetch({
-        "/flights/XX754": (200, body),
-        "/flights/XXX754": (200, body),
+        "/flights/XX321": (200, body),
+        "/flights/XXX321": (200, body),
     }, now=now)
 
 
@@ -47,9 +48,9 @@ def test_cron_follows_next_check_from_30_days_out_to_landing():
     while steps < 40:
         r = check_flight(
             {
-                "flight": "XX754",
-                "date": "2027-12-13",
-                "origin": "DEL",
+                "flight": "XX321",
+                "date": "2027-03-09",
+                "origin": "XXC",
                 "previous_checkpoint": prev_cp,
                 "previous_phase": prev_phase,
                 "attempts": prev_att,
@@ -81,15 +82,15 @@ def test_cron_follows_next_check_from_30_days_out_to_landing():
 
 
 def test_gap_before_visibility_does_not_kill_cron():
-    """02:55 local: midnight-48h call returns empty; next_check must still be set."""
-    # DEL 13 Dec 00:00 IST − 48h = 11 Dec 00:00 IST = 10 Dec 18:30Z
-    now = parse_time("2027-12-10T18:30:00Z")
+    """11:20 local: midnight-48h call returns empty; next_check must still be set."""
+    # XXC 9 Mar 00:00 NZDT − 48h = 7 Mar 00:00 NZDT = 6 Mar 11:00Z
+    now = parse_time("2027-03-06T11:00:00Z")
     r = check_flight(
-        {"flight": "XX754", "date": "2027-12-13", "origin": "DEL"},
+        {"flight": "XX321", "date": "2027-03-09", "origin": "XXC"},
         fetch=_evolving_fetch(now),
         now=now,
     )
     assert r.flight.status in ("unknown", "too_early")
     assert r.next_check_local is not None
     assert r.next_check_in_minutes and r.next_check_in_minutes > 0
-    assert r.next_check_local["tz"] == "Asia/Kolkata"
+    assert r.next_check_local["tz"] == "Pacific/Auckland"
