@@ -169,15 +169,45 @@ def test_upstream_error_is_structured_json_not_bare_502(handler_env, monkeypatch
     assert status != 502 or isinstance(payload.get("error"), dict)
 
 
-def test_vercel_entrypoint_is_declared():
+def test_vercel_entrypoint_is_dispatcher_not_check():
     import tomllib
 
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     with open(os.path.join(root, "pyproject.toml"), "rb") as fh:
         data = tomllib.load(fh)
-    assert data["tool"]["vercel"]["entrypoint"] == "api.check:handler"
-    import api.check as mod
+    vercel = (data.get("tool") or {}).get("vercel") or {}
+    assert vercel.get("entrypoint") == "api.index:handler"
+    assert vercel.get("entrypoint") != "api.check:handler"
+    import api.index as mod
     assert hasattr(mod, "handler")
+
+
+def test_dispatcher_http_health_vs_check(handler_env, monkeypatch):
+    import api.index as mod
+    from flightcheck.store import reset_process_memory, use_store
+
+    monkeypatch.setenv("FLIGHTCHECK_STORAGE", "memory")
+    monkeypatch.delenv("BLOB_READ_WRITE_TOKEN", raising=False)
+    use_store(reset_process_memory())
+    srv = HTTPServer(("127.0.0.1", 0), mod.handler)
+    try:
+        threading.Thread(target=srv.handle_request, daemon=True).start()
+        health = json.loads(
+            urllib.request.urlopen(
+                f"http://127.0.0.1:{srv.server_port}/api/health", timeout=5
+            ).read()
+        )
+        assert health["ok"] is True
+        assert "storage" in health
+        threading.Thread(target=srv.handle_request, daemon=True).start()
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            urllib.request.urlopen(
+                f"http://127.0.0.1:{srv.server_port}/api/check", timeout=5
+            )
+        assert exc.value.code == 401
+    finally:
+        srv.server_close()
+        use_store(None)
 
 
 def test_http_server_roundtrip(handler_env):

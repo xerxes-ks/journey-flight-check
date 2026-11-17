@@ -200,7 +200,7 @@ Example output (on-time, truncated):
 
 1. Create a Vercel project from this repo. Connect it to **`main`** after this PR is merged (the default branch currently has no function).
 2. Set `FLIGHTAWARE_AEROAPI_KEY` and `FLIGHTCHECK_TOKEN`.
-3. Deploy. `pyproject.toml` sets `[tool.vercel] entrypoint = "api.check:handler"`. `vercel.json` sets `maxDuration` 30s. Upstream AeroAPI calls time out at **8s** so a client with a ~10s timeout can treat a hang as retryable.
+3. Deploy. The Python runtime **requires** `[tool.vercel] entrypoint`. It must be **`api.index:handler`** (the dispatcher), never `api.check:handler` — that bug served every path with the authed check handler so `/api/health` and cron `/api/tick` returned 401. `api/index.py` has `maxDuration` 30s. Upstream AeroAPI calls time out at **8s** so a client with a ~10s timeout can treat a hang as retryable.
 
 Auth failures are 401. Missing `flight`/`date` is 400. Budget exceeded is 402. Upstream AeroAPI errors are **structured JSON** (`error.code` / `error.retryable` / `error.snippet`), not a bare 502.
 
@@ -261,7 +261,8 @@ Contract: [`docs/API.md`](docs/API.md), [`openapi.yaml`](openapi.yaml). Tester w
 | `flightcheck/store.py` | Blob / memory / optional Redis |
 | `flightcheck/cli.py` | `python -m flightcheck` (`--now` offline unless `--live`) |
 | `flightcheck/dev.py` | Stdlib threaded server (`python -m flightcheck.dev`) |
-| `api/check.py` / `api/health.py` | Stateless check + public health |
+| `api/index.py` | Vercel entrypoint — dispatches every `/api/*` path |
+| `api/check.py` / `api/health.py` | Stateless check + public health (also routed by the dispatcher) |
 | `api/track.py` / `api/tick.py` / `api/simulate.py` | Tracking + cron + replay |
 | `public/test/index.html` | `/test` console |
 | `scripts/smoke.sh` | Fixture walk against `$BASE` |

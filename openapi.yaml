@@ -4,7 +4,7 @@ info:
   version: 0.1.0
   description: >
     Stateless flight check plus service-owned tracking. Synthetic fixtures
-    XX123 / YY456 / XX754. Preview hosts may sit behind Vercel Authentication.
+    XX123 / YY456 / XX321. Preview hosts may sit behind Vercel Authentication.
 servers:
   - url: '{base}'
     variables:

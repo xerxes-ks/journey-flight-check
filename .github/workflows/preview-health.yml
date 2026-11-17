@@ -1,0 +1,22 @@
+name: preview-health
+
+# Post-deploy: Vercel reports a GitHub deployment. Hit /api/health with the
+# protection bypass when VERCEL_AUTOMATION_BYPASS_SECRET is set on the repo.
+# The pytest route table (test.yml) always guards against api.check:handler.
+on:
+  deployment_status:
+
+jobs:
+  health:
+    if: github.event.deployment_status.state == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: GET /api/health
+        env:
+          PREVIEW_URL: ${{ github.event.deployment_status.target_url }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        run: python3 scripts/preview_health.py

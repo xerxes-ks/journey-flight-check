@@ -24,7 +24,9 @@ include = ["flightcheck*"]
 flightcheck = ["fixtures/aeroapi/*.json"]
 
 [tool.vercel]
-entrypoint = "api.check:handler"
+# Required by the current Python runtime (PYTHON_ENTRYPOINT_NOT_FOUND without it).
+# MUST be the dispatcher, never api.check:handler (that 401'd health + cron).
+entrypoint = "api.index:handler"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

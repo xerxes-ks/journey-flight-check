@@ -135,6 +135,7 @@ IATA_TZ = {
     "TPE": "Asia/Taipei",
     "VIE": "Europe/Vienna",
     "WAW": "Europe/Warsaw",
+    "XXC": "Pacific/Auckland",
     "YUL": "America/Toronto",
     "YVR": "America/Vancouver",
     "YYZ": "America/Toronto",

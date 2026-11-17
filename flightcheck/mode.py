@@ -75,7 +75,7 @@ def _window_error(params: dict, now: dt.datetime) -> str | None:
 
 
 def fixture_fetch(now=None):
-    """Synthetic AeroAPI: XX123 / YY456 / XX754 only."""
+    """Synthetic AeroAPI: XX123 / YY456 / XX321 only."""
     now_dt = parse_now(now) if now is not None else dt.datetime.now(UTC)
     mapping = {
         "/flights/XX123": _load("xx123.json"),
@@ -83,8 +83,8 @@ def fixture_fetch(now=None):
         "/flights/XXX122-1700000000-airline-0002": _load("xx122.json"),
         "/flights/YY456": _load("yy456.json"),
         "/flights/YYY456": _load("yy456.json"),
-        "/flights/XX754": _load("xx754-del.json"),
-        "/flights/XXX754": _load("xx754-del.json"),
+        "/flights/XX321": _load("xx321.json"),
+        "/flights/XXX321": _load("xx321.json"),
     }
 
     def fetch(path, params):
