@@ -22,10 +22,21 @@ STATUSES = (
 DEFAULT_BUDGET_USD = 0.05
 DEFAULT_INBOUND_WINDOW_H = 6
 DEFAULT_MCT = 45
+DEFAULT_SELF_TRANSFER_MCT = 90
 DEFAULT_TERMINAL_CHANGE_MIN = 20
 DEFAULT_CHECKIN_CLOSE_MIN = 45
 DEFAULT_COST_PER_CALL = 0.005
-TOO_EARLY_HOURS = 48
+DEFAULT_ALERT_DELAY_MIN = 45
+ON_TRACK_MAX = 15
+TOO_EARLY_HOURS = 24
+PHASES = (
+    "scheduled",
+    "at_gate_late",
+    "taxiing",
+    "airborne",
+    "landed",
+    "at_arrival_gate",
+)
 WINDOW_END_MAX_AHEAD_H = 47
 WINDOW_START_MAX_PAST_DAYS = 10
 UNKNOWN_RETRY_MIN = 60
@@ -86,6 +97,7 @@ class OnwardRequest:
     bag_recheck: bool = False
     checkin_close_min: int = DEFAULT_CHECKIN_CLOSE_MIN
     separate_ticket: bool = False
+    min_connect_explicit: bool = False
 
 
 @dataclass
@@ -100,6 +112,12 @@ class CheckRequest:
     prior: Optional[Prior] = None
     cost_per_call: float = DEFAULT_COST_PER_CALL
     now: Optional[dt.datetime] = None
+    cadence: str = "essential"
+    alert_delay_min: int = DEFAULT_ALERT_DELAY_MIN
+    previous_checkpoint: Optional[str] = None
+    previous_phase: Optional[str] = None
+    attempts: int = 0
+    previous_gate: Optional[str] = None
 
 
 @dataclass
@@ -109,12 +127,16 @@ class Inbound:
     status: str = ""
     dest_tz: str = "UTC"
     dest_iata: str = ""
+    cancelled: bool = False
+    diverted: bool = False
 
     def to_dict(self) -> dict:
         return {
             "ident": self.ident,
             "est_arr": local_dict(self.est_arr, self.dest_tz, self.dest_iata),
             "status": self.status,
+            "cancelled": self.cancelled,
+            "diverted": self.diverted,
         }
 
 
@@ -131,9 +153,11 @@ class Flight:
     sched_out: Optional[dt.datetime] = None
     est_out: Optional[dt.datetime] = None
     act_out: Optional[dt.datetime] = None
+    act_off: Optional[dt.datetime] = None
     sched_in: Optional[dt.datetime] = None
     est_in: Optional[dt.datetime] = None
     act_in: Optional[dt.datetime] = None
+    act_on: Optional[dt.datetime] = None
     gate_origin: str = ""
     gate_destination: str = ""
     terminal_origin: str = ""
@@ -148,6 +172,9 @@ class Flight:
     source: str = "none"
     live: bool = False
     inbound: Optional[Inbound] = None
+    inbound_fa_flight_id: str = ""
+    status_text: str = ""
+    progress_percent: Optional[int] = None
 
     def to_dict(self) -> dict:
         o, d = self.origin, self.destination
@@ -161,9 +188,11 @@ class Flight:
             "scheduled_out": local_dict(self.sched_out, self.origin_tz, o),
             "estimated_out": local_dict(self.est_out, self.origin_tz, o),
             "actual_out": local_dict(self.act_out, self.origin_tz, o),
+            "actual_off": local_dict(self.act_off, self.origin_tz, o),
             "scheduled_in": local_dict(self.sched_in, self.dest_tz, d),
             "estimated_in": local_dict(self.est_in, self.dest_tz, d),
             "actual_in": local_dict(self.act_in, self.dest_tz, d),
+            "actual_on": local_dict(self.act_on, self.dest_tz, d),
             "gate_origin": self.gate_origin,
             "gate_destination": self.gate_destination,
             "terminal_origin": self.terminal_origin,
@@ -172,6 +201,8 @@ class Flight:
             "aircraft_type": self.aircraft_type,
             "registration": self.registration,
             "status": self.status,
+            "status_text": self.status_text,
+            "progress_percent": self.progress_percent,
             "cancelled": self.cancelled,
             "diverted": self.diverted,
             "divert_to": self.divert_to,
@@ -255,6 +286,11 @@ class CheckResult:
     next_check_in_minutes: Optional[int] = None
     checked_at: str = ""
     error: Optional[dict] = None
+    warning: Optional[dict] = None
+    checkpoint: str = ""
+    phase: str = "scheduled"
+    impact_band: Optional[str] = None
+    attempts: int = 0
 
     @property
     def status(self) -> str:
@@ -262,8 +298,6 @@ class CheckResult:
 
     @property
     def band(self) -> str:
-        if self.connection:
-            return worst(self.prediction.band, self.connection.band)
         return self.prediction.band
 
     @property
@@ -275,6 +309,10 @@ class CheckResult:
             "ok": self.ok,
             "status": self.status,
             "band": self.band,
+            "impact_band": self.impact_band,
+            "phase": self.phase,
+            "checkpoint": self.checkpoint,
+            "attempts": self.attempts,
             "final": self.final,
             "summary": self.summary,
             "flight": self.flight.to_dict(),
@@ -288,4 +326,5 @@ class CheckResult:
             "calls": [c.to_dict() if hasattr(c, "to_dict") else c for c in self.calls],
             "cost_usd_est": self.cost_usd_est,
             "error": self.error,
+            "warning": self.warning,
         }

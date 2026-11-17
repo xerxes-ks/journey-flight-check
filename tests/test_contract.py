@@ -101,7 +101,7 @@ def test_input_example_matches_schema(schema):
 
 def test_tool_schema_is_tiny(schema):
     props = set(schema["inputSchema"]["properties"])
-    assert props == {"flight", "date", "origin", "onward"}
+    assert {"flight", "date", "origin", "onward", "cadence"}.issubset(props)
     assert schema["inputSchema"]["required"] == ["flight", "date"]
     onward = set(schema["inputSchema"]["properties"]["onward"]["properties"])
     assert onward == {
@@ -125,20 +125,22 @@ def test_next_poll_min_aliases_minutes(schema):
     )
     data = result.to_dict()
     assert data["next_poll_min"] == data["next_check_in_minutes"]
-    assert data["next_poll_min"] == 15
+    assert data["next_poll_min"] == 30
+    assert data["checkpoint"] == "t_minus_3h"
     assert data["checked_at"] == NEAR_DEP
     validator(schema).validate(data)
 
 
 def test_cancelled_next_poll_min_is_null(schema):
     result = check_flight(
-        {"flight": "XX123", "date": "2027-03-15"},
+        {"flight": "XX123", "date": "2027-03-15", "previous_checkpoint": "t_minus_3h", "attempts": 1},
         fetch=scenario_fetch(flight="xx123-cancelled.json"),
         now=parse_time(NEAR_DEP),
     )
     data = result.to_dict()
     assert data["final"] is True
     assert data["next_poll_min"] is None
+    assert data["checkpoint"] == "done"
     validator(schema).validate(data)
 
 

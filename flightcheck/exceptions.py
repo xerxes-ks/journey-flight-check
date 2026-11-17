@@ -71,9 +71,9 @@ class AeroAPIError(CheckError):
     def __init__(self, http_status: int, snippet: str = "", code: str | None = None):
         code = code or error_code_for_http(http_status)
         if code == "timeout":
-            msg = "AeroAPI timeout"
+            msg = "The live status request timed out."
         else:
             msg = f"AeroAPI HTTP {http_status}"
-        if snippet:
-            msg = f"{msg}: {snippet}"
+            if snippet:
+                msg = f"{msg}: {snippet}"
         super().__init__(msg, code=code, http_status=http_status, snippet=snippet)

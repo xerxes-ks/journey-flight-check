@@ -67,7 +67,7 @@ def assess(
         parts.append(f" (airline shows +{later} min)")
     parts.append(f"; you need about {required} min")
     if spec.terminal_change:
-        parts.append(f" incl. a terminal change ({spec.terminal_change_min} min)")
+        parts.append(f" including a terminal change ({spec.terminal_change_min} min)")
     if close:
         parts.append(f" and check-in/bag-drop closes {close} min before")
     why = "".join(parts)

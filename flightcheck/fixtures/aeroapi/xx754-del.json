@@ -1,0 +1,90 @@
+{
+  "flights": [
+    {
+      "ident": "XXX754",
+      "ident_icao": "XXX754",
+      "ident_iata": "XX754",
+      "fa_flight_id": "XXX754-1700001300-airline-0013",
+      "operator": "XXX",
+      "operator_icao": "XXX",
+      "operator_iata": "XX",
+      "flight_number": "754",
+      "registration": "VT0XX",
+      "inbound_fa_flight_id": null,
+      "cancelled": false,
+      "diverted": false,
+      "origin": {
+        "code": "VIDP",
+        "code_icao": "VIDP",
+        "code_iata": "DEL",
+        "timezone": "Asia/Kolkata",
+        "name": "Indira Gandhi Intl",
+        "city": "Delhi"
+      },
+      "destination": {
+        "code": "RKSI",
+        "code_icao": "RKSI",
+        "code_iata": "ICN",
+        "timezone": "Asia/Seoul",
+        "name": "Incheon Intl",
+        "city": "Seoul"
+      },
+      "scheduled_out": "2027-12-12T21:25:00Z",
+      "estimated_out": "2027-12-12T21:25:00Z",
+      "actual_out": null,
+      "scheduled_in": "2027-12-13T04:55:00Z",
+      "estimated_in": "2027-12-13T04:55:00Z",
+      "actual_in": null,
+      "status": "Scheduled",
+      "aircraft_type": "B788",
+      "baggage_claim": "12",
+      "gate_origin": "15",
+      "gate_destination": "11",
+      "terminal_origin": "3",
+      "terminal_destination": "1"
+    },
+    {
+      "ident": "XXX754",
+      "ident_icao": "XXX754",
+      "ident_iata": "XX754",
+      "fa_flight_id": "XXX754-1700001200-airline-0012",
+      "operator": "XXX",
+      "operator_icao": "XXX",
+      "operator_iata": "XX",
+      "flight_number": "754",
+      "registration": "VT0XY",
+      "inbound_fa_flight_id": null,
+      "cancelled": false,
+      "diverted": false,
+      "origin": {
+        "code": "VIDP",
+        "code_icao": "VIDP",
+        "code_iata": "DEL",
+        "timezone": "Asia/Kolkata",
+        "name": "Indira Gandhi Intl",
+        "city": "Delhi"
+      },
+      "destination": {
+        "code": "RKSI",
+        "code_icao": "RKSI",
+        "code_iata": "ICN",
+        "timezone": "Asia/Seoul",
+        "name": "Incheon Intl",
+        "city": "Seoul"
+      },
+      "scheduled_out": "2027-12-11T21:25:00Z",
+      "estimated_out": "2027-12-11T21:25:00Z",
+      "actual_out": "2027-12-11T21:31:00Z",
+      "scheduled_in": "2027-12-12T04:55:00Z",
+      "estimated_in": "2027-12-12T05:02:00Z",
+      "actual_in": "2027-12-12T05:04:00Z",
+      "status": "Arrived",
+      "aircraft_type": "B788",
+      "baggage_claim": "12",
+      "gate_origin": "14",
+      "gate_destination": "11",
+      "terminal_origin": "3",
+      "terminal_destination": "1"
+    }
+  ]
+}

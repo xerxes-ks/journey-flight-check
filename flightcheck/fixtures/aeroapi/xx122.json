@@ -1,0 +1,47 @@
+{
+  "flights": [
+    {
+      "ident": "XXX122",
+      "ident_icao": "XXX122",
+      "ident_iata": "XX122",
+      "fa_flight_id": "XXX122-1700000000-airline-0002",
+      "operator": "XXX",
+      "operator_icao": "XXX",
+      "operator_iata": "XX",
+      "flight_number": "122",
+      "registration": "N123XX",
+      "inbound_fa_flight_id": null,
+      "cancelled": false,
+      "diverted": false,
+      "origin": {
+        "code": "KXXC",
+        "code_icao": "KXXC",
+        "code_iata": "XXC",
+        "timezone": "America/Denver",
+        "name": "Example Field",
+        "city": "Elsewhere"
+      },
+      "destination": {
+        "code": "KXXA",
+        "code_icao": "KXXA",
+        "code_iata": "XXA",
+        "timezone": "America/New_York",
+        "name": "Example Municipal",
+        "city": "Exampleton"
+      },
+      "scheduled_out": "2027-03-15T14:00:00Z",
+      "estimated_out": "2027-03-15T14:00:00Z",
+      "actual_out": "2027-03-15T14:05:00Z",
+      "scheduled_in": "2027-03-15T17:00:00Z",
+      "estimated_in": "2027-03-15T17:00:00Z",
+      "actual_in": null,
+      "status": "En Route",
+      "aircraft_type": "B738",
+      "baggage_claim": null,
+      "gate_origin": "C1",
+      "gate_destination": "A12",
+      "terminal_origin": "1",
+      "terminal_destination": "1"
+    }
+  ]
+}

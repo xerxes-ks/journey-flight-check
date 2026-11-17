@@ -19,6 +19,7 @@ if ROOT not in sys.path:
 
 from flightcheck import check as flightcheck_svc  # noqa: E402
 from flightcheck.exceptions import BudgetExceeded, CheckError, error_dict  # noqa: E402
+from flightcheck.mode import fixture_fetch, is_fixtures, resolve_now  # noqa: E402
 from flightcheck.sanitize import redact  # noqa: E402
 
 HTTP_BUDGET_CAP = 0.50
@@ -64,13 +65,21 @@ def handle(method: str, headers: dict, query: dict, body: dict | None):
                 data["onward"] = body["onward"]
     if not (data.get("flight") or data.get("ident")) or not data.get("date"):
         return 400, {"ok": False, "error": error_dict("bad_request", "flight and date are required")}
+    if not is_fixtures(headers):
+        data.pop("now", None)
     try:
         req = flightcheck_svc.parse_request(data)
     except (ValueError, TypeError, KeyError) as exc:
         return 400, {"ok": False, "error": error_dict("bad_request", redact(exc))}
     req.budget_usd = min(float(req.budget_usd), HTTP_BUDGET_CAP)
+    now = resolve_now(headers, data, query)
+    call_kw = {}
+    if is_fixtures(headers):
+        call_kw["fetch"] = fixture_fetch(now=now)
+    if now is not None:
+        call_kw["now"] = now
     try:
-        result = flightcheck_svc.check_flight(req)
+        result = flightcheck_svc.check_flight(req, **call_kw)
     except BudgetExceeded as exc:
         err = error_dict("budget_exceeded", redact(exc))
         err["budget_usd"] = req.budget_usd

@@ -26,7 +26,9 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--onward", help="onward flight number")
     c.add_argument("--onward-date", help="onward ticket date YYYY-MM-DD (default: same as flight)")
     c.add_argument("--onward-origin", help="IATA for the onward departure airport")
-    c.add_argument("--mct", type=int, default=45, help="minimum connection time in minutes")
+    c.add_argument("--mct", type=int, default=None, help="minimum connection time in minutes (default 90 min for self-transfer, else 45)")
+    c.add_argument("--cadence", choices=("essential", "dense"), default="essential")
+    c.add_argument("--alert-delay-min", type=int, default=45, help="punctuality watch/at-risk threshold in minutes")
     c.add_argument("--terminal-change", action="store_true")
     c.add_argument("--terminal-change-min", type=int, default=20, help="extra minutes for a terminal change")
     c.add_argument("--bag-recheck", action="store_true")
@@ -53,18 +55,22 @@ def main(argv=None) -> int:
     }
     if args.min_turn is not None:
         payload["min_turn"] = args.min_turn
+    payload["cadence"] = args.cadence
+    payload["alert_delay_min"] = args.alert_delay_min
     if args.onward:
-        payload["onward"] = {
+        onward = {
             "flight": args.onward,
             "date": args.onward_date,
             "origin": args.onward_origin,
-            "min_connect_min": args.mct,
             "terminal_change": args.terminal_change,
             "terminal_change_min": args.terminal_change_min,
             "bags_recheck": args.bag_recheck,
             "checkin_close_min": args.checkin_close_min,
             "separate_ticket": args.separate_ticket,
         }
+        if args.mct is not None:
+            onward["min_connect_min"] = args.mct
+        payload["onward"] = onward
     now = parse_now(args.now) if args.now else None
     # --now is a dry run / fixture clock. Hit AeroAPI only with an explicit --live.
     offline = bool(args.now) and not args.live

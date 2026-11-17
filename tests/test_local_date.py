@@ -27,11 +27,12 @@ def test_picks_origin_local_date_not_utc_date():
 
 
 def test_next_local_day_is_a_different_instance():
-    fetch = scenario_fetch(now=NOW)
+    now = "2027-12-12T12:00:00Z"
+    fetch = scenario_fetch(now=now)
     r = check_flight(
         {"flight": "XX754", "date": "2027-12-13", "origin": "DEL"},
         fetch=fetch,
-        now=parse_time(NOW),
+        now=parse_time(now),
     )
     assert r.flight.fa_flight_id == "XXX754-1700001300-airline-0013"
     so = r.flight.to_dict()["scheduled_out"]

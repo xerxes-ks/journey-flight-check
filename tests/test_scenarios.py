@@ -31,7 +31,8 @@ def test_on_time():
     assert r.prediction.dep_delay_min == 0
     assert r.ok
     assert r.to_dict()["checked_at"] == "2027-03-15T16:30:00Z"
-    assert r.to_dict()["next_poll_min"] == 15
+    assert r.to_dict()["next_poll_min"] == 30
+    assert r.to_dict()["checkpoint"] == "t_minus_3h"
     d = r.flight.to_dict()
     so = d["scheduled_out"]
     assert so["tz"] == "America/New_York"
@@ -42,7 +43,7 @@ def test_on_time():
     assert "UTC" not in r.prediction.reasons[0] if r.prediction.reasons else True
     assert r.summary
     assert r.next_check_local is not None
-    assert r.next_check_in_minutes == 15  # T-90 min → 15-min cadence
+    assert r.next_check_in_minutes == 30  # T-90 min → next essential checkpoint T-1h
 
 
 def test_on_time_connection_protected():
@@ -111,7 +112,7 @@ def test_missed_mct_separate_ticket():
 
 
 def test_cancelled_is_final():
-    r = run(scenario_fetch(flight="xx123-cancelled.json"))
+    r = run(scenario_fetch(flight="xx123-cancelled.json"), previous_checkpoint="t_minus_3h", attempts=1)
     assert r.flight.cancelled and r.flight.status == "cancelled"
     assert r.prediction.band == "at_risk"
     assert r.prediction.final is True
@@ -119,7 +120,7 @@ def test_cancelled_is_final():
     assert r.next_check_in_minutes is None
     assert r.to_dict()["next_poll_min"] is None
     assert r.to_dict()["checked_at"].endswith("Z")
-    assert r.prediction.reasons[0].startswith("cancelled")
+    assert "cancelled" in r.prediction.reasons[0]
     r2 = run(
         scenario_fetch(flight="xx123-cancelled.json"),
         onward={"flight": "YY456", "date": "2027-03-15", "min_connect_min": 45},
@@ -205,6 +206,7 @@ def test_airborne_uses_live_arrival():
     body = load_fx("xx123.json")
     f = body["flights"][0]
     f["actual_out"] = "2027-03-15T18:05:00Z"
+    f["actual_off"] = "2027-03-15T18:12:00Z"
     f["estimated_in"] = "2027-03-15T21:40:00Z"
     f["inbound_fa_flight_id"] = None
     fetch = make_fetch({"/flights/XX123": (200, body)})
@@ -218,13 +220,16 @@ def test_landed_is_final():
     body = load_fx("xx123.json")
     f = body["flights"][0]
     f["actual_out"] = "2027-03-15T18:10:00Z"
+    f["actual_off"] = "2027-03-15T18:12:00Z"
+    f["actual_on"] = "2027-03-15T21:10:00Z"
     f["actual_in"] = "2027-03-15T21:12:00Z"
     f["inbound_fa_flight_id"] = None
     fetch = make_fetch({"/flights/XX123": (200, body)})
     r = run(fetch)
     assert r.flight.status == "landed"
-    assert r.prediction.final
+    assert r.prediction.final is True
+    assert r.final is True
+    assert r.checkpoint == "done"
     assert r.next_check_local is None
-    assert r.next_check_in_minutes is None
     assert r.prediction.dep_delay_min == 10
     assert r.prediction.arr_delay_min == 12

@@ -36,12 +36,13 @@ def test_too_early_skips_api():
     assert r.next_check_local is not None
     assert r.next_check_local["tz"] == "America/Los_Angeles"
     assert r.next_check_in_minutes > 0
-    # Visibility is local midnight 22 Mar LAX minus 47h → 20 Mar local.
-    assert "20 Mar" in r.next_check_local["human"] or "2027-03-20" in r.next_check_local["local"]
+    # First lookup is local noon 22 Mar LAX minus 24h → noon 21 Mar local.
+    assert "21 Mar" in r.next_check_local["human"] or "2027-03-21" in r.next_check_local["local"]
     assert "Live checks open" in r.summary
-    assert "20 Mar" in r.summary or "LAX time" in r.summary
+    assert "21 Mar" in r.summary or "LAX time" in r.summary
     assert r.cost_usd_est == 0
     assert r.summary.startswith("XX123")
+    assert "24 hours" in r.summary
     # Jump to visibility (days away), not an hourly retry.
     assert r.next_check_in_minutes > 60
 

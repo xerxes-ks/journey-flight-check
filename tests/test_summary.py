@@ -51,6 +51,7 @@ def test_airborne_summary_includes_destination_local_arrival():
     body = load_fx("xx123.json")
     f = body["flights"][0]
     f["actual_out"] = "2027-03-15T18:05:00Z"
+    f["actual_off"] = "2027-03-15T18:12:00Z"
     f["estimated_in"] = "2027-03-15T21:40:00Z"
     f["inbound_fa_flight_id"] = None
     r = run(make_fetch({"/flights/XX123": (200, body)}))
@@ -68,7 +69,7 @@ def test_landed_summary_includes_terminal_gate_belt():
     f["actual_in"] = "2027-03-15T21:12:00Z"
     f["inbound_fa_flight_id"] = None
     r = run(make_fetch({"/flights/XX123": (200, body)}))
-    assert r.final
+    assert r.final is True
     assert "landed" in r.summary
     assert "terminal 2" in r.summary
     assert "gate B4" in r.summary
@@ -125,6 +126,8 @@ def test_terminal_change_in_margin_and_schema_fields():
     )
     assert r.connection.required_min == 70
     assert "terminal change (25 min)" in r.connection.explain
+    assert "including a terminal change" in r.connection.explain
+    assert "incl." not in r.summary
 
 
 def test_delay_of_90_min_reads_in_hours():
