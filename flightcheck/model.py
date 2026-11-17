@@ -6,6 +6,7 @@ import datetime as dt
 from dataclasses import asdict, dataclass, field
 from typing import Any, Optional
 
+from .exceptions import InvalidDate
 from .times import UTC, local_dict
 
 BANDS = ["on_track", "watch", "at_risk", "unknown"]
@@ -67,7 +68,13 @@ def parse_time(value) -> Optional[dt.datetime]:
 def parse_date(value) -> dt.date:
     if isinstance(value, dt.date) and not isinstance(value, dt.datetime):
         return value
-    return dt.date.fromisoformat(str(value)[:10])
+    raw = str(value or "").strip()
+    if len(raw) < 10:
+        raise InvalidDate("invalid date")
+    try:
+        return dt.date.fromisoformat(raw[:10])
+    except ValueError:
+        raise InvalidDate("invalid date") from None
 
 
 def mins(delta: dt.timedelta) -> int:

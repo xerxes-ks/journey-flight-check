@@ -37,6 +37,7 @@ def test_auth_rejected_without_token(handler_env):
     status, payload = handle("GET", {}, {"flight": "XX123", "date": "2027-03-15"}, None)
     assert status == 401
     assert payload["error"]["code"] == "unauthorized"
+    assert payload["error"]["message"] == "missing or invalid token"
     assert payload["error"]["retryable"] is False
 
 

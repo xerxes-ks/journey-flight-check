@@ -67,11 +67,17 @@ def predict(
             return pack(0, 0, "unknown", ["no live data for this flight"], schedule_only=True)
     if (flight.act_in or flight.act_on) and sta:
         arrived = flight.act_in or flight.act_on
-        dd = mins(flight.act_out - std) if flight.act_out and std else 0
-        ad = mins(arrived - sta)
+        arr_ref = sta
+        if flight.est_in and abs(mins(flight.est_in - sta)) >= 30:
+            arr_ref = flight.est_in
+        dep_ref = std
+        if flight.est_out and std and abs(mins(flight.est_out - std)) >= 30:
+            dep_ref = flight.est_out
+        dd = mins(flight.act_out - dep_ref) if flight.act_out and dep_ref else 0
+        ad = mins(arrived - arr_ref)
         return pack(
             dd, ad, band_for(ad, alert_delay_min),
-            [f"landed {clock(arrived, dest_tz, d, vs=sta)}"],
+            [f"landed {clock(arrived, dest_tz, d, vs=arr_ref)}"],
             final=True,
         )
 

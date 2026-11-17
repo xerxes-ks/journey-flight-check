@@ -59,14 +59,16 @@ bash scripts/smoke.sh
 
 It hits health (no auth), expects 401 on `/api/check` without a token, then a fixture check, then the track/tick/events/sink/untrack walk against `XX123` on `2027-03-15`.
 
-## Preview / Vercel Authentication
+## Production alias vs preview SSO
 
-The production and preview deployments sit behind **Vercel Authentication** (SSO / login HTML). That gate runs *before* `/api/health`. An external tester (Codex, `curl`, CI) cannot reach JSON until one of:
+The **production alias** (`https://journey-flight-check.vercel.app`) is **public** at the Vercel Authentication layer and **token-gated** at the app (`Authorization: Bearer $FLIGHTCHECK_TOKEN` on every route except `GET /api/health`). `curl` the production host with the token; no SSO cookie is required.
+
+**Deployment / preview URLs** (and other non-production aliases) sit behind **Vercel Authentication** (SSO / login HTML). That gate runs *before* `/api/health`. An external tester (Codex, `curl`, CI) cannot reach JSON on those URLs until one of:
 
 1. A **Protection Bypass for Automation** header (`x-vercel-protection-bypass`) is configured on the project and shared out of band — not committed here.
 2. The tester is logged into Vercel in a browser and uses the preview URL there.
 3. `vercel curl` / `npx vercel curl` as a project member.
 
-Self-webhook deliveries (`webhook_url=$BASE/api/webhook-sink`) from the preview also need that bypass; the function’s outbound POST has no SSO cookie. Local `python3 -m flightcheck.dev` and `vercel dev` do not have this gate.
+Self-webhook deliveries (`webhook_url=$BASE/api/webhook-sink`) from a preview also need that bypass; the function’s outbound POST has no SSO cookie. Local `python3 -m flightcheck.dev` and `vercel dev` do not have this gate.
 
-Share `FLIGHTCHECK_TOKEN` and the bypass out of band. Never put them in this public repo.
+Share `FLIGHTCHECK_TOKEN` (and the bypass, for preview) out of band. Never put them in this public repo.

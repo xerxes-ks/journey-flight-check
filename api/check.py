@@ -18,20 +18,19 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 from flightcheck import check as flightcheck_svc  # noqa: E402
-from flightcheck.exceptions import BudgetExceeded, CheckError, error_dict  # noqa: E402
+from flightcheck.exceptions import (  # noqa: E402
+    BudgetExceeded,
+    CheckError,
+    HTTP_FOR_CODE,
+    UNAUTH_MESSAGE,
+    error_dict,
+    http_status_for,
+)
 from flightcheck.mode import fixture_fetch, is_fixtures, resolve_now  # noqa: E402
 from flightcheck.sanitize import redact  # noqa: E402
 
 HTTP_BUDGET_CAP = 0.50
-
-# Application error codes → HTTP. Upstream 5xx stay 200 with a structured
-# error object so a tool-calling client always gets JSON, never a bare 502.
-ERROR_HTTP = {
-    "budget_exceeded": 402,
-    "not_found": 404,
-    "bad_request": 400,
-    "rate_limited": 429,
-}
+ERROR_HTTP = HTTP_FOR_CODE
 
 
 def _authorized(header: str | None) -> bool:
@@ -52,7 +51,7 @@ def handle(method: str, headers: dict, query: dict, body: dict | None):
     """Pure handler used by the Vercel class and by tests. Returns (status, payload)."""
     auth = headers.get("Authorization") or headers.get("authorization")
     if not _authorized(auth):
-        return 401, {"ok": False, "error": error_dict("unauthorized", "unauthorized")}
+        return 401, {"ok": False, "error": error_dict("unauthorized", UNAUTH_MESSAGE)}
     data = dict(query or {})
     if method == "POST":
         if body:
@@ -69,6 +68,10 @@ def handle(method: str, headers: dict, query: dict, body: dict | None):
         data.pop("now", None)
     try:
         req = flightcheck_svc.parse_request(data)
+    except CheckError as exc:
+        payload = {"ok": False, "error": exc.to_dict()}
+        payload["error"]["message"] = redact(exc)
+        return http_status_for(exc.code, default=400, http_status=exc.http_status), payload
     except (ValueError, TypeError, KeyError) as exc:
         return 400, {"ok": False, "error": error_dict("bad_request", redact(exc))}
     req.budget_usd = min(float(req.budget_usd), HTTP_BUDGET_CAP)
@@ -87,7 +90,7 @@ def handle(method: str, headers: dict, query: dict, body: dict | None):
     except CheckError as exc:
         payload = {"ok": False, "error": exc.to_dict()}
         payload["error"]["message"] = redact(exc)
-        return ERROR_HTTP.get(exc.code, 200), payload
+        return http_status_for(exc.code, default=200, http_status=exc.http_status), payload
     except Exception as exc:
         return 200, {"ok": False, "error": error_dict("upstream_error", redact(exc))}
     payload = result.to_dict()

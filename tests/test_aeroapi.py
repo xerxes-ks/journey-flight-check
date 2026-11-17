@@ -102,6 +102,9 @@ def test_retryable_flags():
     assert error_dict("not_found", "x")["retryable"] is False
     assert error_dict("budget_exceeded", "x")["retryable"] is False
     assert error_dict("unauthorized", "x")["retryable"] is False
+    assert error_dict("storage_error", "x")["retryable"] is False
+    assert error_dict("origin_mismatch", "x")["retryable"] is False
+    assert error_dict("invalid_date", "x")["retryable"] is False
 
 
 def test_upstream_timeout_is_fail_fast():

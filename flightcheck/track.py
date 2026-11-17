@@ -11,7 +11,7 @@ from typing import Optional
 from . import check as check_mod
 from .events import deliver_webhook, detect_events, event_payload
 from .exceptions import error_dict
-from .model import UTC, normalize_ident, parse_time
+from .model import UTC, normalize_ident, parse_date, parse_time
 from .store import EVENTS_MAX, SINK_MAX, Storage, get_store
 
 DEFAULT_DAILY_BUDGET = 0.50
@@ -157,6 +157,7 @@ def start_track(
     webhook = (data.get("webhook_url") or "").strip()
     if not flight or not date:
         raise ValueError("flight and date are required")
+    date = parse_date(date).isoformat()
     if not webhook:
         raise ValueError("webhook_url is required")
     store = store or get_store()

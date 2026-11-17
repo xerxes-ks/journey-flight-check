@@ -8,7 +8,7 @@ import os
 import re
 
 from .events import verify_signature
-from .exceptions import error_dict
+from .exceptions import UNAUTH_MESSAGE, error_dict, http_status_for
 from .health import health_payload
 from .httpsvc import authorized, cron_authorized, wrap_errors
 from .mode import fixture_fetch, is_fixtures, resolve_now
@@ -29,6 +29,15 @@ def _tid(*candidates) -> str:
     return ""
 
 
+def _untrack_status(tid: str):
+    out = untrack(tid)
+    if not out.get("ok"):
+        err = out.get("error") or {}
+        code = err.get("code") or "not_found"
+        return http_status_for(code, default=404), out
+    return 200, out
+
+
 def handle_health(method, headers, query, body, path="", raw=b""):
     if method != "GET":
         return 405, {"ok": False, "error": error_dict("method_not_allowed", "GET only")}
@@ -38,7 +47,7 @@ def handle_health(method, headers, query, body, path="", raw=b""):
 @wrap_errors
 def handle_track(method, headers, query, body, path="", raw=b""):
     if not authorized(headers):
-        return 401, {"ok": False, "error": error_dict("unauthorized", "missing or invalid token")}
+        return 401, {"ok": False, "error": error_dict("unauthorized", UNAUTH_MESSAGE)}
     path_only = (path or "").split("?")[0]
     m = TRACK_ID.match(path_only)
     tid = _tid(m.group(1) if m else "", query.get("id"), (body or {}).get("tracking_id"))
@@ -52,25 +61,25 @@ def handle_track(method, headers, query, body, path="", raw=b""):
         out = start_track(body or {}, **track_kw)
         return 200, out
     if method == "DELETE" and tid:
-        return 200, untrack(tid)
+        return _untrack_status(tid)
     return 405, {"ok": False, "error": error_dict("method_not_allowed", "POST /api/track or DELETE /api/track/{id}")}
 
 
 @wrap_errors
 def handle_untrack(method, headers, query, body, path="", raw=b""):
     if not authorized(headers):
-        return 401, {"ok": False, "error": error_dict("unauthorized", "missing or invalid token")}
+        return 401, {"ok": False, "error": error_dict("unauthorized", UNAUTH_MESSAGE)}
     m = UNTRACK_POST.match((path or "").split("?")[0])
     tid = _tid(m.group(1) if m else "", query.get("id"), (body or {}).get("tracking_id"))
     if method not in ("POST", "DELETE") or not tid:
         return 400, {"ok": False, "error": error_dict("bad_request", "tracking_id required")}
-    return 200, untrack(tid)
+    return _untrack_status(tid)
 
 
 @wrap_errors
 def handle_tracked(method, headers, query, body, path="", raw=b""):
     if not authorized(headers):
-        return 401, {"ok": False, "error": error_dict("unauthorized", "missing or invalid token")}
+        return 401, {"ok": False, "error": error_dict("unauthorized", UNAUTH_MESSAGE)}
     if method != "GET":
         return 405, {"ok": False, "error": error_dict("method_not_allowed", "GET only")}
     path_only = (path or "").split("?")[0]
@@ -98,7 +107,7 @@ def handle_tracked(method, headers, query, body, path="", raw=b""):
 @wrap_errors
 def handle_events(method, headers, query, body, path="", raw=b""):
     if not authorized(headers):
-        return 401, {"ok": False, "error": error_dict("unauthorized", "missing or invalid token")}
+        return 401, {"ok": False, "error": error_dict("unauthorized", UNAUTH_MESSAGE)}
     if method != "GET":
         return 405, {"ok": False, "error": error_dict("method_not_allowed", "GET only")}
     path_only = (path or "").split("?")[0]
@@ -119,7 +128,7 @@ def handle_events(method, headers, query, body, path="", raw=b""):
 @wrap_errors
 def handle_tick(method, headers, query, body, path="", raw=b""):
     if not (cron_authorized(headers) or authorized(headers)):
-        return 401, {"ok": False, "error": error_dict("unauthorized", "missing or invalid cron secret")}
+        return 401, {"ok": False, "error": error_dict("unauthorized", UNAUTH_MESSAGE)}
     if method not in ("GET", "POST"):
         return 405, {"ok": False, "error": error_dict("method_not_allowed", "GET or POST")}
     now = resolve_now(headers, body or {}, query)
@@ -134,7 +143,7 @@ def handle_tick(method, headers, query, body, path="", raw=b""):
 @wrap_errors
 def handle_simulate(method, headers, query, body, path="", raw=b""):
     if not authorized(headers):
-        return 401, {"ok": False, "error": error_dict("unauthorized", "missing or invalid token")}
+        return 401, {"ok": False, "error": error_dict("unauthorized", UNAUTH_MESSAGE)}
     if method == "GET":
         return 200, {"ok": True, "scenarios": list(SCENARIOS)}
     if method != "POST":
@@ -146,7 +155,7 @@ def handle_simulate(method, headers, query, body, path="", raw=b""):
 def handle_webhook_sink(method, headers, query, body, path="", raw=b""):
     if method == "GET":
         if not authorized(headers):
-            return 401, {"ok": False, "error": error_dict("unauthorized", "missing or invalid token")}
+            return 401, {"ok": False, "error": error_dict("unauthorized", UNAUTH_MESSAGE)}
         items = list_sink(get_store())
         return 200, {"ok": True, "count": len(items), "deliveries": items}
     if method != "POST":

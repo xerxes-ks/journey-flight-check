@@ -22,7 +22,7 @@ import urllib.request
 from typing import Optional
 from urllib.parse import urlencode
 
-from .exceptions import CheckError
+from .exceptions import CheckError, StorageError
 
 BLOB_API = "https://blob.vercel-storage.com"
 BLOB_API_VERSION = "7"
@@ -218,11 +218,13 @@ class BlobStore(Storage):
             return exc.code, raw, dict(exc.headers or {})
 
     def put_json(self, path: str, obj: dict) -> None:
+        # @vercel/blob putOptionHeaderMap: access → x-vercel-blob-access.
+        # Private stores reject PUT without that header even if access= is in
+        # the query string ("Cannot use public access on a private store").
         pathname = _norm(path)
         body = json.dumps(obj, separators=(",", ":")).encode()
         qs = urlencode({
             "pathname": pathname,
-            "access": "private",
             "addRandomSuffix": "false",
             "allowOverwrite": "true",
             "cacheControlMaxAge": "0",
@@ -232,6 +234,7 @@ class BlobStore(Storage):
             data=body,
             method="PUT",
             headers=self._headers({
+                "x-vercel-blob-access": "private",
                 "x-content-type": "application/json",
                 "x-add-random-suffix": "0",
                 "x-allow-overwrite": "1",
@@ -241,17 +244,16 @@ class BlobStore(Storage):
         )
         status, raw, _ = self._open(req)
         if status not in (200, 201):
-            raise CheckError(
-                f"blob put HTTP {status}: {raw[:200]!r}",
-                code="upstream_error",
-                http_status=int(status or 0),
-            )
+            _raise_blob("put", status, raw)
 
     def get_json(self, path: str) -> Optional[dict]:
+        # Private reads: {storeId}.private.blob.vercel-storage.com + Bearer.
+        # useCache:false → cache=0 (SDK get.ts). List/del do not send access.
         pathname = _norm(path)
         url = self._object_url(pathname)
+        sep = "&" if "?" in url else "?"
         req = urllib.request.Request(
-            url,
+            url + sep + "cache=0",
             method="GET",
             headers=self._headers(),
         )
@@ -259,16 +261,13 @@ class BlobStore(Storage):
         if status in (404, 400):
             return None
         if status != 200:
-            raise CheckError(
-                f"blob get HTTP {status}",
-                code="upstream_error",
-                http_status=int(status or 0),
-            )
+            _raise_blob("get", status, raw)
         if not raw:
             return None
         return json.loads(raw.decode())
 
     def delete(self, path: str) -> None:
+        # SDK del.ts: POST /delete JSON {urls}, Content-Type + optional x-if-match.
         pathname = _norm(path)
         url = self._object_url(pathname)
         body = json.dumps({"urls": [url]}).encode()
@@ -280,13 +279,10 @@ class BlobStore(Storage):
         )
         status, raw, _ = self._open(req)
         if status not in (200, 204, 404):
-            raise CheckError(
-                f"blob delete HTTP {status}: {raw[:200]!r}",
-                code="upstream_error",
-                http_status=int(status or 0),
-            )
+            _raise_blob("delete", status, raw)
 
     def list_prefix(self, prefix: str) -> list[str]:
+        # SDK list: GET ?prefix=&limit=&cursor= with Authorization + x-api-version.
         out = []
         cursor = None
         p = _norm(prefix)
@@ -301,11 +297,7 @@ class BlobStore(Storage):
             )
             status, raw, _ = self._open(req)
             if status != 200:
-                raise CheckError(
-                    f"blob list HTTP {status}",
-                    code="upstream_error",
-                    http_status=int(status or 0),
-                )
+                _raise_blob("list", status, raw)
             data = json.loads(raw.decode() or "{}")
             for blob in data.get("blobs") or []:
                 name = blob.get("pathname") or blob.get("url") or ""
@@ -322,6 +314,15 @@ class BlobStore(Storage):
         if self._store_id and "blob.vercel-storage.com" in self.base_url:
             return f"https://{self._store_id}.private.blob.vercel-storage.com/{pathname}"
         return self.base_url.rstrip("/") + "/" + pathname
+
+
+def _raise_blob(op: str, status, raw) -> None:
+    text = (raw or b"").decode("utf-8", "replace")[:240] if isinstance(raw, (bytes, bytearray)) else str(raw or "")[:240]
+    code = int(status or 0)
+    msg = f"blob {op} HTTP {code}"
+    if text:
+        msg = f"{msg}: {text}"
+    raise StorageError(msg, http_status=503, snippet=text[:160])
 
 
 def _norm(path: str) -> str:

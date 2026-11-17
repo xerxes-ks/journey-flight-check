@@ -135,3 +135,6 @@ def test_console_has_check_form_and_fixtures_on_by_default():
     assert "X-Flightcheck-Mode" in html
     assert 'id="chkFlight"' in html
     assert "/api/check" in html
+    assert 'id="healthBadge"' in html
+    assert 'id="sinkInbox"' in html
+    assert 'id="clockStepper"' in html

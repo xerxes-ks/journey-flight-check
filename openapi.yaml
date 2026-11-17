@@ -4,7 +4,8 @@ info:
   version: 0.1.0
   description: >
     Stateless flight check plus service-owned tracking. Synthetic fixtures
-    XX123 / YY456 / XX321. Preview hosts may sit behind Vercel Authentication.
+    XX123 / YY456 / XX321. The production alias is public and token-gated;
+    deployment/preview URLs may sit behind Vercel Authentication.
 servers:
   - url: '{base}'
     variables:
@@ -68,6 +69,8 @@ paths:
       responses:
         "200":
           description: ok
+        "404":
+          description: not_found
   /api/track/{id}:
     delete:
       summary: Stop tracking
@@ -80,6 +83,8 @@ paths:
       responses:
         "200":
           description: ok
+        "404":
+          description: not_found
   /api/untrack:
     post:
       summary: Stop tracking
@@ -94,6 +99,8 @@ paths:
       responses:
         "200":
           description: ok
+        "404":
+          description: not_found
   /api/tracked:
     get:
       summary: List tracks
