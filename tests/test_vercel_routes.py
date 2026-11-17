@@ -1,4 +1,4 @@
-"""Route table: each api/*.py is its own function. No pyproject entrypoint."""
+"""Route table: dispatcher entrypoint, not api.check:handler."""
 
 from __future__ import annotations
 
@@ -9,36 +9,24 @@ import tomllib
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-EXPECTED = {
-    "api/health.py": "/api/health",
-    "api/check.py": "/api/check",
-    "api/track.py": "/api/track",
-    "api/untrack.py": "/api/untrack",
-    "api/tracked.py": "/api/tracked",
-    "api/events.py": "/api/tracked/{id}/events",
-    "api/tick.py": "/api/tick",
-    "api/simulate.py": "/api/simulate",
-    "api/webhook-sink.py": "/api/webhook-sink",
-}
+DISPATCHER = "api.index:handler"
+FORBIDDEN = "api.check:handler"
 
 
-def test_pyproject_does_not_pin_a_single_python_entrypoint():
+def test_pyproject_entrypoint_is_the_dispatcher():
     with open(os.path.join(ROOT, "pyproject.toml"), "rb") as fh:
         data = tomllib.load(fh)
     vercel = (data.get("tool") or {}).get("vercel") or {}
-    assert "entrypoint" not in vercel, (
-        "[tool.vercel] entrypoint funnels every /api/* path through one handler "
-        f"({vercel.get('entrypoint')}); health and cron then 401."
-    )
+    assert vercel.get("entrypoint") == DISPATCHER, vercel
+    assert vercel.get("entrypoint") != FORBIDDEN
 
 
-def test_vercel_json_declares_each_function_and_cron():
+def test_vercel_json_declares_dispatcher_and_cron():
     with open(os.path.join(ROOT, "vercel.json")) as fh:
         cfg = json.load(fh)
     fns = cfg["functions"]
-    for path in EXPECTED:
-        assert path in fns, path
-        assert int(fns[path]["maxDuration"]) == 30
+    assert "api/index.py" in fns
+    assert int(fns["api/index.py"]["maxDuration"]) == 30
     crons = cfg.get("crons") or []
     assert any(c.get("path") == "/api/tick" and c.get("schedule") == "*/5 * * * *" for c in crons)
     sources = {r["source"] for r in cfg.get("rewrites") or []}
@@ -47,28 +35,17 @@ def test_vercel_json_declares_each_function_and_cron():
     assert "/api/tracked/:id/events" in sources
 
 
-def test_each_api_module_exports_handler():
-    import importlib
+def test_dispatcher_module_exports_handler():
+    import api.index as mod
 
-    modules = {
-        "api.health": "api/health.py",
-        "api.check": "api/check.py",
-        "api.track": "api/track.py",
-        "api.untrack": "api/untrack.py",
-        "api.tracked": "api/tracked.py",
-        "api.events": "api/events.py",
-        "api.tick": "api/tick.py",
-        "api.simulate": "api/simulate.py",
-    }
-    for modname, path in modules.items():
-        mod = importlib.import_module(modname)
-        assert hasattr(mod, "handler"), path
-        assert hasattr(mod, "handle"), path
-    # hyphenated filename is not a Python module name
-    sink_path = os.path.join(ROOT, "api", "webhook-sink.py")
-    text = open(sink_path).read()
-    assert "handler = make_handler" in text
-    assert "handle_webhook_sink" in text
+    assert hasattr(mod, "handler")
+    assert hasattr(mod, "handle")
+    from flightcheck.dispatch import ROUTES
+
+    paths = [r[1] for r in ROUTES]
+    assert "/api/health" in paths
+    assert "/api/check" in paths
+    assert "/api/tick" in paths
 
 
 def test_health_does_not_require_auth():
@@ -123,6 +100,32 @@ def test_check_still_requires_token_and_is_not_health(monkeypatch):
     assert "storage" in h_payload
     assert c_status == 401
     assert c_payload["error"]["code"] == "unauthorized"
+
+
+def test_dispatch_health_vs_check_vs_tick(monkeypatch):
+    from flightcheck.dispatch import dispatch
+    from flightcheck.store import reset_process_memory, use_store
+
+    monkeypatch.setenv("FLIGHTCHECK_TOKEN", "tok")
+    monkeypatch.setenv("CRON_SECRET", "cron-secret")
+    monkeypatch.setenv("FLIGHTCHECK_STORAGE", "memory")
+    monkeypatch.delenv("BLOB_READ_WRITE_TOKEN", raising=False)
+    use_store(reset_process_memory())
+    h_status, h_payload = dispatch("GET", {}, {}, {}, "/api/health")
+    c_status, c_payload = dispatch("GET", {}, {}, {}, "/api/check")
+    t_status, t_payload = dispatch(
+        "GET", {"Authorization": "Bearer cron-secret"}, {}, {}, "/api/tick"
+    )
+    n_status, _ = dispatch("GET", {}, {}, {}, "/api/nope")
+    assert h_status == 200
+    assert h_payload.get("ok") is True
+    assert "storage" in h_payload
+    assert c_status == 401
+    assert c_payload["error"]["code"] == "unauthorized"
+    assert t_status == 200, t_payload
+    assert t_payload.get("ok") is True
+    assert n_status == 404
+    use_store(None)
 
 
 def test_console_has_check_form_and_fixtures_on_by_default():

@@ -9,7 +9,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
 .venv/bin/python -m pytest
 ```
 
-Stdlib-only runtime. Tests inject AeroAPI `fetch` and a fake Blob HTTP server; CI never calls FlightAware or Vercel Blob. `tests/test_vercel_routes.py` asserts there is **no** `[tool.vercel] entrypoint` (that bug served every `/api/*` path with `api/check.py`) and that each `api/*.py` function plus the `/api/tick` cron is declared. After a Vercel deploy, `.github/workflows/preview-health.yml` hits `/api/health` with `x-vercel-protection-bypass` when the `VERCEL_AUTOMATION_BYPASS_SECRET` GitHub secret is set.
+Stdlib-only runtime. Tests inject AeroAPI `fetch` and a fake Blob HTTP server; CI never calls FlightAware or Vercel Blob. `tests/test_vercel_routes.py` asserts `[tool.vercel] entrypoint` is **`api.index:handler`** (not `api.check:handler`, which 401'd health and cron) and that `vercel.json` sets `maxDuration` 30 on the dispatcher plus the `/api/tick` cron. After a Vercel deploy, `.github/workflows/preview-health.yml` hits `/api/health` with `x-vercel-protection-bypass` when the `VERCEL_AUTOMATION_BYPASS_SECRET` GitHub secret is set.
 
 ## Stdlib dev server
 
@@ -31,7 +31,7 @@ Then `GET http://127.0.0.1:8000/test` and the `/api/*` routes.
 Copy `.env.example` to `.env.local`. Set `BLOB_READ_WRITE_TOKEN` (Vercel Blob private store), `FLIGHTCHECK_TOKEN`, `FLIGHTCHECK_WEBHOOK_SECRET`, `CRON_SECRET`. Leave `FLIGHTCHECK_STORAGE` unset so Blob is the default. `vercel.json` maps:
 
 - `/test` → `public/test/index.html`
-- `/api/*.py` Python functions (`check`, `health`, `track`, `tick`, `simulate`, `webhook-sink`, …)
+- `api/index.py` dispatcher (`[tool.vercel] entrypoint = "api.index:handler"`) plus the per-route modules it calls
 - Cron `*/5 * * * *` → `/api/tick`
 
 ```bash

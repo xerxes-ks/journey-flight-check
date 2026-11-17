@@ -2,7 +2,7 @@ name: preview-health
 
 # Post-deploy: Vercel reports a GitHub deployment. Hit /api/health with the
 # protection bypass when VERCEL_AUTOMATION_BYPASS_SECRET is set on the repo.
-# The pytest route table (test.yml) always guards the pyproject entrypoint bug.
+# The pytest route table (test.yml) always guards against api.check:handler.
 on:
   deployment_status:
 

@@ -1,15 +1,9 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "functions": {
-    "api/health.py": { "maxDuration": 30, "excludeFiles": "{tests,.github,scripts,docs}/**" },
-    "api/check.py": { "maxDuration": 30, "excludeFiles": "{tests,.github,scripts,docs}/**" },
-    "api/track.py": { "maxDuration": 30, "excludeFiles": "{tests,.github,scripts,docs}/**" },
-    "api/untrack.py": { "maxDuration": 30, "excludeFiles": "{tests,.github,scripts,docs}/**" },
-    "api/tracked.py": { "maxDuration": 30, "excludeFiles": "{tests,.github,scripts,docs}/**" },
-    "api/events.py": { "maxDuration": 30, "excludeFiles": "{tests,.github,scripts,docs}/**" },
-    "api/tick.py": { "maxDuration": 30, "excludeFiles": "{tests,.github,scripts,docs}/**" },
-    "api/simulate.py": { "maxDuration": 30, "excludeFiles": "{tests,.github,scripts,docs}/**" },
-    "api/webhook-sink.py": { "maxDuration": 30, "excludeFiles": "{tests,.github,scripts,docs}/**" }
+    "api/index.py": {
+      "maxDuration": 30
+    }
   },
   "crons": [
     {

@@ -23,20 +23,19 @@ def assert_route_table() -> None:
     with open(os.path.join(ROOT, "pyproject.toml"), "rb") as fh:
         data = tomllib.load(fh)
     vercel = (data.get("tool") or {}).get("vercel") or {}
-    if "entrypoint" in vercel:
+    entry = vercel.get("entrypoint")
+    if entry != "api.index:handler":
         raise SystemExit(
-            f"pyproject [tool.vercel] entrypoint={vercel['entrypoint']!r} "
-            "would route every /api/* path through one handler"
+            f"pyproject [tool.vercel] entrypoint={entry!r}; "
+            "must be api.index:handler (not api.check:handler)"
         )
     with open(os.path.join(ROOT, "vercel.json")) as fh:
         cfg = json.load(fh)
     fns = cfg.get("functions") or {}
-    for name in (
-        "api/health.py", "api/check.py", "api/tick.py",
-        "api/track.py", "api/webhook-sink.py",
-    ):
-        if name not in fns:
-            raise SystemExit(f"vercel.json missing function {name}")
+    if "api/index.py" not in fns:
+        raise SystemExit("vercel.json missing function api/index.py")
+    if int(fns["api/index.py"].get("maxDuration") or 0) != 30:
+        raise SystemExit("api/index.py maxDuration must be 30")
 
 
 def fetch_health(base: str) -> tuple[int, dict | str]:
