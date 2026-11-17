@@ -24,8 +24,11 @@ from urllib.parse import urlencode
 
 from .exceptions import CheckError, StorageError
 
-BLOB_API = "https://blob.vercel-storage.com"
-BLOB_API_VERSION = "7"
+# Current @vercel/blob (helpers.ts getApiUrl / api.ts BLOB_API_VERSION):
+# PUT https://vercel.com/api/blob/?pathname=…  x-api-version: 13
+# Options are x-* headers, not query params. LIST/DEL use the same host.
+BLOB_API = "https://vercel.com/api/blob"
+BLOB_API_VERSION = "13"
 EVENTS_MAX = 200
 SINK_MAX = 50
 PREFIX = "fc:"
@@ -193,7 +196,12 @@ class BlobStore(Storage):
 
     def __init__(self, token: str, base_url: str | None = None, fetch=None):
         self.token = token
-        self.base_url = (base_url or os.environ.get("BLOB_API_URL") or BLOB_API).rstrip("/")
+        self.base_url = (
+            base_url
+            or os.environ.get("BLOB_API_URL")
+            or os.environ.get("VERCEL_BLOB_API_URL")
+            or BLOB_API
+        ).rstrip("/")
         self.fetch = fetch
         self._store_id = _blob_store_id(token)
 
@@ -203,6 +211,8 @@ class BlobStore(Storage):
             "x-api-version": BLOB_API_VERSION,
             "Cache-Control": "no-store",
         }
+        if self._store_id:
+            h["x-vercel-blob-store-id"] = self._store_id
         if extra:
             h.update(extra)
         return h
@@ -218,17 +228,12 @@ class BlobStore(Storage):
             return exc.code, raw, dict(exc.headers or {})
 
     def put_json(self, path: str, obj: dict) -> None:
-        # @vercel/blob putOptionHeaderMap: access → x-vercel-blob-access.
-        # Private stores reject PUT without that header even if access= is in
-        # the query string ("Cannot use public access on a private store").
+        # SDK put.ts: PUT getApiUrl('/?pathname=…') with options as x-* headers
+        # only (putOptionHeaderMap). Extra query keys made production answer
+        # 400 Invalid pathname. Keep the store private.
         pathname = _norm(path)
         body = json.dumps(obj, separators=(",", ":")).encode()
-        qs = urlencode({
-            "pathname": pathname,
-            "addRandomSuffix": "false",
-            "allowOverwrite": "true",
-            "cacheControlMaxAge": "0",
-        })
+        qs = urlencode({"pathname": pathname})
         req = urllib.request.Request(
             self.base_url + "/?" + qs,
             data=body,
@@ -282,7 +287,7 @@ class BlobStore(Storage):
             _raise_blob("delete", status, raw)
 
     def list_prefix(self, prefix: str) -> list[str]:
-        # SDK list: GET ?prefix=&limit=&cursor= with Authorization + x-api-version.
+        # SDK list.ts: GET getApiUrl('?prefix=&limit=&cursor=') — no access header.
         out = []
         cursor = None
         p = _norm(prefix)
@@ -311,9 +316,16 @@ class BlobStore(Storage):
         return sorted(out)
 
     def _object_url(self, pathname: str) -> str:
-        if self._store_id and "blob.vercel-storage.com" in self.base_url:
+        # SDK get.ts constructBlobUrl: {storeId}.private.blob.vercel-storage.com
+        # for private reads. Emulators / fake servers keep the override origin.
+        if self._store_id and _is_prod_blob_api(self.base_url):
             return f"https://{self._store_id}.private.blob.vercel-storage.com/{pathname}"
         return self.base_url.rstrip("/") + "/" + pathname
+
+
+def _is_prod_blob_api(base_url: str) -> bool:
+    host = (base_url or "").lower()
+    return "vercel.com" in host or "blob.vercel-storage.com" in host
 
 
 def _raise_blob(op: str, status, raw) -> None:

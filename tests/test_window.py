@@ -47,6 +47,25 @@ def test_too_early_skips_api():
     assert r.next_check_in_minutes > 60
 
 
+def test_too_early_cannot_origin_mismatch_without_aeroapi():
+    """too_early skips AeroAPI, so a wrong origin cannot be rejected yet."""
+    called = []
+
+    def fetch(path, params):
+        called.append(path)
+        return 200, {"flights": []}
+
+    r = check_flight(
+        {"flight": "XX123", "date": "2027-03-22", "origin": "LHR"},
+        fetch=fetch,
+        now=parse_time("2027-03-15T16:30:00Z"),
+    )
+    assert called == []
+    assert r.ok is True
+    assert r.flight.status == "too_early"
+    assert r.error is None or r.error.get("code") != "origin_mismatch"
+
+
 def test_unclamped_window_is_rejected_by_fake_fetch():
     """If date_window forgot to clamp, AeroAPI-shaped fetch returns 400."""
     now = parse_time(NEAR_DEP)
