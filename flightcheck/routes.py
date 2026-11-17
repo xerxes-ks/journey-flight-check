@@ -14,7 +14,18 @@ from .httpsvc import authorized, cron_authorized, wrap_errors
 from .mode import fixture_fetch, is_fixtures, resolve_now
 from .simulate import SCENARIOS, run_simulate
 from .store import get_store
-from .track import list_event_log, list_sink, list_tracks, load_track, public_track, push_sink, start_track, tick, untrack
+from .track import (
+    list_event_log,
+    list_sink,
+    list_tracks,
+    load_track,
+    public_track,
+    push_sink,
+    request_namespace,
+    start_track,
+    tick,
+    untrack,
+)
 
 TRACK_ID = re.compile(r"^/api/track/([^/]+)/?$")
 EVENTS_ID = re.compile(r"^/api/tracked/([^/]+)/events/?$")
@@ -29,8 +40,14 @@ def _tid(*candidates) -> str:
     return ""
 
 
-def _untrack_status(tid: str):
-    out = untrack(tid)
+def _store_for(headers):
+    from .store import namespaced_store
+    return namespaced_store(get_store(), request_namespace(headers))
+
+
+def _untrack_status(tid: str, headers=None):
+    ns = request_namespace(headers)
+    out = untrack(tid, store=_store_for(headers), namespace=ns)
     if not out.get("ok"):
         err = out.get("error") or {}
         code = err.get("code") or "not_found"
@@ -53,7 +70,8 @@ def handle_track(method, headers, query, body, path="", raw=b""):
     tid = _tid(m.group(1) if m else "", query.get("id"), (body or {}).get("tracking_id"))
     if method == "POST" and path_only.rstrip("/") in ("/api/track",):
         now = resolve_now(headers, body, query)
-        track_kw = {}
+        ns = request_namespace(headers)
+        track_kw = {"store": _store_for(headers), "namespace": ns}
         if is_fixtures(headers):
             track_kw["fetch"] = fixture_fetch(now=now)
         if now is not None:
@@ -61,7 +79,7 @@ def handle_track(method, headers, query, body, path="", raw=b""):
         out = start_track(body or {}, **track_kw)
         return 200, out
     if method == "DELETE" and tid:
-        return _untrack_status(tid)
+        return _untrack_status(tid, headers)
     return 405, {"ok": False, "error": error_dict("method_not_allowed", "POST /api/track or DELETE /api/track/{id}")}
 
 
@@ -73,7 +91,7 @@ def handle_untrack(method, headers, query, body, path="", raw=b""):
     tid = _tid(m.group(1) if m else "", query.get("id"), (body or {}).get("tracking_id"))
     if method not in ("POST", "DELETE") or not tid:
         return 400, {"ok": False, "error": error_dict("bad_request", "tracking_id required")}
-    return _untrack_status(tid)
+    return _untrack_status(tid, headers)
 
 
 @wrap_errors
@@ -86,21 +104,23 @@ def handle_tracked(method, headers, query, body, path="", raw=b""):
     m = EVENTS_ID.match(path_only)
     mid = TRACKED_ID.match(path_only)
     tid = _tid(m.group(1) if m else "", query.get("id"), mid.group(1) if mid else "")
+    store = _store_for(headers)
+    ns = request_namespace(headers)
     if m or (tid and "events" in path_only):
-        rec = load_track(get_store(), tid)
+        rec = load_track(store, tid)
         if not rec:
             return 404, {"ok": False, "error": error_dict("not_found", "tracking_id not found")}
         return 200, {
             "ok": True,
             "tracking_id": rec["tracking_id"],
-            "events": list_event_log(get_store(), rec["tracking_id"]),
+            "events": list_event_log(store, rec["tracking_id"]),
         }
     if tid:
-        rec = load_track(get_store(), tid)
+        rec = load_track(store, tid)
         if not rec:
             return 404, {"ok": False, "error": error_dict("not_found", "tracking_id not found")}
         return 200, {"ok": True, "track": public_track(rec)}
-    items = list_tracks()
+    items = list_tracks(store=store, namespace=ns)
     return 200, {"ok": True, "count": len(items), "tracks": items}
 
 
@@ -115,13 +135,14 @@ def handle_events(method, headers, query, body, path="", raw=b""):
     tid = _tid(m.group(1) if m else "", query.get("id"))
     if not tid:
         return 400, {"ok": False, "error": error_dict("bad_request", "tracking_id required")}
-    rec = load_track(get_store(), tid)
+    store = _store_for(headers)
+    rec = load_track(store, tid)
     if not rec:
         return 404, {"ok": False, "error": error_dict("not_found", "tracking_id not found")}
     return 200, {
         "ok": True,
         "tracking_id": rec["tracking_id"],
-        "events": list_event_log(get_store(), rec["tracking_id"]),
+        "events": list_event_log(store, rec["tracking_id"]),
     }
 
 
@@ -132,7 +153,8 @@ def handle_tick(method, headers, query, body, path="", raw=b""):
     if method not in ("GET", "POST"):
         return 405, {"ok": False, "error": error_dict("method_not_allowed", "GET or POST")}
     now = resolve_now(headers, body or {}, query)
-    tick_kw = {}
+    ns = request_namespace(headers)
+    tick_kw = {"store": _store_for(headers), "namespace": ns}
     if is_fixtures(headers):
         tick_kw["fetch"] = fixture_fetch(now=now)
     if now is not None:

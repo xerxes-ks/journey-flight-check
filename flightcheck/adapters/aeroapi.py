@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import math
 import socket
 import time
 import urllib.error
@@ -103,13 +104,27 @@ class AeroAPIAdapter:
         inbound_window_h=DEFAULT_INBOUND_WINDOW_H,
         log=None,
         cost_per_call=DEFAULT_COST_PER_CALL,
+        spend_guard=None,
     ):
         self.key = key
-        self.budget = float(budget_usd)
+        try:
+            budget = float(budget_usd)
+        except (TypeError, ValueError):
+            budget = 0.0
+        if not math.isfinite(budget) or budget < 0:
+            budget = 0.0
+        self.budget = budget
         self.fetch = fetch or self._http
         self.inbound_window = dt.timedelta(hours=inbound_window_h)
         self.calls = log if log is not None else []
-        self.cost_per_call = float(cost_per_call)
+        try:
+            unit = float(cost_per_call)
+        except (TypeError, ValueError):
+            unit = DEFAULT_COST_PER_CALL
+        if not math.isfinite(unit) or unit < 0:
+            unit = DEFAULT_COST_PER_CALL
+        self.cost_per_call = unit
+        self.spend_guard = spend_guard
         self.fallback = ScheduleAdapter()
 
     @property
@@ -145,8 +160,12 @@ class AeroAPIAdapter:
 
     def call(self, path, params=None):
         cost = self.cost_per_call
-        if self.spent + cost > self.budget + 1e-9:
+        if not math.isfinite(cost) or cost < 0:
+            raise BudgetExceeded("invalid unit price")
+        if not math.isfinite(self.budget) or self.spent + cost > self.budget + 1e-9:
             raise BudgetExceeded(f"budget ${self.budget} reached")
+        if self.spend_guard is not None and not self.spend_guard(cost):
+            raise BudgetExceeded("daily budget reached")
         t0 = time.time()
         try:
             status, body = self.fetch(path, params or {})

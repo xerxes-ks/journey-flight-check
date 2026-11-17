@@ -6,6 +6,7 @@ Enforces a per-call AeroAPI budget cap. Stateless.
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 import os
 import secrets
@@ -27,7 +28,10 @@ from flightcheck.exceptions import (  # noqa: E402
     http_status_for,
 )
 from flightcheck.mode import fixture_fetch, is_fixtures, resolve_now  # noqa: E402
+from flightcheck.model import DEFAULT_COST_PER_CALL, UTC  # noqa: E402
 from flightcheck.sanitize import redact  # noqa: E402
+from flightcheck.store import StorageNotConfigured, get_store, namespaced_store  # noqa: E402
+from flightcheck.track import daily_budget, request_namespace, reserve_spend  # noqa: E402
 
 HTTP_BUDGET_CAP = 0.50
 ERROR_HTTP = HTTP_FOR_CODE
@@ -75,12 +79,26 @@ def handle(method: str, headers: dict, query: dict, body: dict | None):
     except (ValueError, TypeError, KeyError) as exc:
         return 400, {"ok": False, "error": error_dict("bad_request", redact(exc))}
     req.budget_usd = min(float(req.budget_usd), HTTP_BUDGET_CAP)
+    req.cost_per_call = DEFAULT_COST_PER_CALL
     now = resolve_now(headers, data, query)
     call_kw = {}
     if is_fixtures(headers):
         call_kw["fetch"] = fixture_fetch(now=now)
     if now is not None:
         call_kw["now"] = now
+    store = None
+    try:
+        store = namespaced_store(get_store(), request_namespace(headers))
+    except StorageNotConfigured:
+        store = None
+
+    def spend_guard(amount):
+        if store is None:
+            return True
+        clock = now or dt.datetime.now(UTC)
+        return reserve_spend(store, clock, amount, daily_budget())
+
+    call_kw["spend_guard"] = spend_guard
     try:
         result = flightcheck_svc.check_flight(req, **call_kw)
     except BudgetExceeded as exc:

@@ -57,6 +57,10 @@ paths:
           description: tracking_id
         "401":
           description: Unauthorized
+        "409":
+          description: conflict — same subscriber, different ref/onward/policy/threshold
+        "402":
+          description: budget_exceeded
         "503":
           description: storage_not_configured
     delete:
@@ -243,6 +247,10 @@ components:
         cadence: {type: string, enum: [essential, dense]}
         now: {type: string, description: fixtures only}
         onward: {type: object}
+        budget_usd:
+          type: number
+          minimum: 0
+          description: Finite nonnegative per-request cap. 0 means zero calls. NaN/Infinity rejected.
     TrackRequest:
       type: object
       required: [flight, date, webhook_url]
