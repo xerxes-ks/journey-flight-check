@@ -37,7 +37,7 @@ def test_essential_plan_0940_sequence():
         if plan.checkpoint == "landing" and actual_off and not actual_on:
             actual_on = STA
             actual_in = STA + dt.timedelta(minutes=8)
-            prev_phase = "at_arrival_gate"
+            prev_phase = "landed"
         now = plan.next_at
         steps += 1
     names = [c for c, _ in times]

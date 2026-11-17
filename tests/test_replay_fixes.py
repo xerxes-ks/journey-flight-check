@@ -6,7 +6,6 @@ import datetime as dt
 from copy import deepcopy
 
 from flightcheck import check_flight, essential_plan
-from flightcheck.cadence import ONBLOCK_FOLLOWUP
 from flightcheck.model import parse_time
 from tests.conftest import NEAR_DEP, load_fx, make_fetch, scenario_fetch
 
@@ -171,46 +170,39 @@ def test_3_t_minus_30m_is_flight_only():
     assert not any("XXX122" in p for p in paths)
 
 
-def test_4_touchdown_is_not_final_followup_captures_gate():
+def test_4_landing_that_sees_onblock_is_final():
     body = deepcopy(load_fx("xx123.json"))
     f = body["flights"][0]
     f["actual_out"] = "2027-03-15T18:10:00Z"
     f["actual_off"] = "2027-03-15T18:12:00Z"
     f["actual_on"] = "2027-03-15T21:00:00Z"
+    f["actual_in"] = "2027-03-15T21:08:00Z"
+    f["inbound_fa_flight_id"] = None
+    published = check_flight(
+        {"flight": "XX123", "date": "2027-03-15", "origin": "XXA"},
+        fetch=make_fetch({"/flights/XX123": (200, body)}),
+        now=parse_time("2027-03-15T21:10:00Z"),
+    )
+    assert published.final is True
+    assert published.checkpoint == "done"
+    assert published.next_check_local is None
+    assert "gate B4" in published.summary
+    assert "baggage belt 4" in published.summary
+
     f["actual_in"] = None
     f["gate_destination"] = None
     f["baggage_claim"] = None
-    f["inbound_fa_flight_id"] = None
-    touch = parse_time("2027-03-15T21:00:00Z")
-    r1 = check_flight(
+    f["terminal_destination"] = None
+    unpublished = check_flight(
         {"flight": "XX123", "date": "2027-03-15", "origin": "XXA"},
         fetch=make_fetch({"/flights/XX123": (200, body)}),
-        now=touch,
+        now=parse_time("2027-03-15T21:10:00Z"),
     )
-    assert r1.final is False
-    assert r1.checkpoint == "landing"
-    assert r1.next_check_in_minutes >= 20
-    follow_body = deepcopy(body)
-    follow_body["flights"][0]["actual_in"] = "2027-03-15T21:08:00Z"
-    follow_body["flights"][0]["gate_destination"] = "B4"
-    follow_body["flights"][0]["baggage_claim"] = "4"
-    follow_body["flights"][0]["terminal_destination"] = "2"
-    r2 = check_flight(
-        {
-            "flight": "XX123",
-            "date": "2027-03-15",
-            "origin": "XXA",
-            "previous_checkpoint": r1.checkpoint,
-            "previous_phase": r1.phase,
-            "attempts": r1.attempts,
-        },
-        fetch=make_fetch({"/flights/XX123": (200, follow_body)}),
-        now=touch + ONBLOCK_FOLLOWUP,
-    )
-    assert r2.final is True
-    assert r2.checkpoint == "done"
-    assert "gate B4" in r2.summary
-    assert "baggage belt 4" in r2.summary
+    assert unpublished.final is True
+    assert unpublished.checkpoint == "done"
+    assert unpublished.next_check_local is None
+    assert "gate B4" not in unpublished.summary
+    assert "baggage belt" not in unpublished.summary.lower()
 
 
 def test_5_onward_skipped_outside_47h_and_except_at_t3_landed_or_watch():

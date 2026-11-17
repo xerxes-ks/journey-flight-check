@@ -1,4 +1,4 @@
-"""Recheck cadence. Default is a sparse essential schedule (~8–11 calls).
+"""Recheck cadence. Default is a sparse essential schedule (~7–10 calls).
 
 Dense (the old 15-min poll table) is available as cadence='dense'.
 This package does not schedule itself; callers follow next_check_*.
@@ -37,7 +37,6 @@ TAKEOFF_AFTER = dt.timedelta(minutes=30)
 LANDING_AFTER = dt.timedelta(minutes=10)
 MIN_LANDING_GAP = dt.timedelta(minutes=20)
 GROUND_RECHECK = dt.timedelta(minutes=30)
-ONBLOCK_FOLLOWUP = dt.timedelta(minutes=20)
 CANCEL_RECHECK = dt.timedelta(minutes=30)
 RETRYABLE_RETRY = dt.timedelta(minutes=15)
 MAX_AIRBORNE_CHECKS = 24
@@ -175,17 +174,9 @@ def essential_plan(
 
     landed = actual_on is not None or actual_in is not None
     airborne = actual_off is not None and not landed
-    prev_landed = (previous_phase or "") in ("landed", "at_arrival_gate")
 
     if landed:
-        onblock = actual_in or actual_on
-        followup_at = onblock + ONBLOCK_FOLLOWUP
-        if prev_landed and now >= followup_at:
-            return Plan("done", None, False, max(attempts, 1), final=True)
-        if previous_checkpoint == "landing" and attempts >= 1 and prev_landed:
-            return Plan("done", None, False, attempts, final=True)
-        nxt = followup_at if followup_at > now else now + ONBLOCK_FOLLOWUP
-        return Plan("landing", nxt, False, max(attempts, 1), final=False)
+        return Plan("done", None, False, max(attempts, 1), final=True)
 
     if airborne:
         eta_plus = landing_due

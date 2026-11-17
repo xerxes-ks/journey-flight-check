@@ -117,10 +117,10 @@ def test_simulate_on_time_replays_essential_checkpoints_with_call_counts():
     out = run_simulate({
         "scenario": "on_time",
         "flight": "XX123",
-        "date": "2027-03-15",
+        "date": "2027-06-22",
         "origin": "LHR",
         "destination": "SIN",
-        "std_local": "14:00",
+        "std_local": "09:40",
     })
     assert out["ok"] is True
     assert out["cost_usd"] == 0.0
@@ -128,8 +128,8 @@ def test_simulate_on_time_replays_essential_checkpoints_with_call_counts():
     assert "t_minus_24h" in names
     assert "t_minus_30m" in names
     assert "takeoff" in names
-    assert names[-1] in ("landing", "done")
-    assert out["calls_total"] >= 6
+    assert names[-1] == "done"
+    assert out["calls_total"] == 9
     assert all(step.get("calls", 0) >= 0 for step in out["timeline"])
 
 

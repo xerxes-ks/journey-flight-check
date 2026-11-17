@@ -227,22 +227,9 @@ def test_landed_is_final():
     fetch = make_fetch({"/flights/XX123": (200, body)})
     r = run(fetch)
     assert r.flight.status == "landed"
-    assert r.prediction.final is False
-    assert r.next_check_in_minutes is not None
-    assert r.next_check_in_minutes >= 20
-    follow = check_flight(
-        {
-            "flight": "XX123",
-            "date": "2027-03-15",
-            "origin": "XXA",
-            "previous_checkpoint": r.checkpoint,
-            "previous_phase": r.phase,
-            "attempts": r.attempts,
-        },
-        fetch=fetch,
-        now=parse_time("2027-03-15T21:32:00Z"),
-    )
-    assert follow.prediction.final
-    assert follow.next_check_local is None
+    assert r.prediction.final is True
+    assert r.final is True
+    assert r.checkpoint == "done"
+    assert r.next_check_local is None
     assert r.prediction.dep_delay_min == 10
     assert r.prediction.arr_delay_min == 12

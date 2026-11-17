@@ -26,7 +26,7 @@ SCENARIOS = (
     "upstream_outage",
 )
 
-DEFAULT_STD = "14:00"
+DEFAULT_STD = "09:40"
 BLOCK_H = 3
 
 

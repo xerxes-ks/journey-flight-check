@@ -65,13 +65,14 @@ def predict(
     if flight.status == "unknown" or (not flight.live and flight.source != "aeroapi"):
         if not std or not sta:
             return pack(0, 0, "unknown", ["no live data for this flight"], schedule_only=True)
-    if flight.act_in and sta:
+    if (flight.act_in or flight.act_on) and sta:
+        arrived = flight.act_in or flight.act_on
         dd = mins(flight.act_out - std) if flight.act_out and std else 0
-        ad = mins(flight.act_in - sta)
+        ad = mins(arrived - sta)
         return pack(
             dd, ad, band_for(ad, alert_delay_min),
-            [f"landed {clock(flight.act_in, dest_tz, d, vs=sta)}"],
-            final=False,
+            [f"landed {clock(arrived, dest_tz, d, vs=sta)}"],
+            final=True,
         )
 
     if not std or not sta or not flight.live:

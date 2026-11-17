@@ -28,7 +28,7 @@
         "type": "string",
         "enum": ["essential", "dense"],
         "default": "essential",
-        "description": "essential (default, ~8–11 calls) or dense (legacy 15-min table)."
+        "description": "essential (default, ~7–10 calls; 9 on time) or dense (legacy 15-min table)."
       },
       "alert_delay_min": {
         "type": "integer",
@@ -42,7 +42,7 @@
       },
       "previous_phase": {
         "type": "string",
-        "description": "Echo phase from the last result so the +20 min on-block follow-up is not confused with an airborne landing retry."
+        "description": "Echo phase from the last result so airborne landing retries are counted."
       },
       "attempts": {
         "type": "integer",

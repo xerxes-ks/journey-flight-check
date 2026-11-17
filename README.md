@@ -11,7 +11,7 @@ Tickets print local times. Callers (an LLM concierge or a cron) should **never c
 - **Input `date`** is the departure date as printed on the ticket (the origin airport’s local calendar date). There is no timezone parameter. Optional `origin` (IATA) disambiguates duplicate flight numbers and is used to resolve timezone *before* the first AeroAPI call.
 - **Output times** are ISO-8601 strings **with the airport’s offset**, plus `tz` (IANA name) and a short `human` form such as `09:40 Tue 22 Jun (LHR time)`. Departures use the origin tz; arrivals use the destination tz. Reason strings use those local clocks, never UTC.
 - **`checked_at`** is the UTC time of this check (ISO with `Z`). Store it with the result to judge freshness.
-- **`next_check_local`** is in the origin’s local time; **`next_check_in_minutes`** / **`next_poll_min`** (same integer) is the wait from `now`. **Null only when the result is `final`**. `too_early` is not final: `next_check` is **T−24h**. Echo `checkpoint`, `previous_phase`, and `attempts` on the next call so cancelled / takeoff / landing retries and the on-block follow-up are counted. Never `final` while `phase` is `airborne`.
+- **`next_check_local`** is in the origin’s local time; **`next_check_in_minutes`** / **`next_poll_min`** (same integer) is the wait from `now`. **Null only when the result is `final`**. `too_early` is not final: `next_check` is **T−24h**. Echo `checkpoint`, `previous_phase`, and `attempts` on the next call so cancelled / takeoff / landing retries are counted. Never `final` while `phase` is `airborne`. A landing check that already sees on-block or runway-on is `final`.
 - **`summary`** is a short paragraph a chat bot can relay as-is (human band words: on track / worth watching / at risk). Top-level `status`, `band`, and `final` duplicate the fields a cron or LLM is most likely to branch on.
 
 ### Timezones
@@ -67,7 +67,7 @@ About **$0.005 per result set** (configurable via `cost_per_call`). This is an *
 
 ## Recheck cadence
 
-Default is **`cadence=essential`**: about **8–11 AeroAPI result sets** per flight. Pass `cadence=dense` (or `poll_interval`) for the old 15-minute table.
+Default is **`cadence=essential`**: about **7–10 AeroAPI result sets** per flight (**9** on time). Pass `cadence=dense` (or `poll_interval`) for the old 15-minute table.
 
 | Checkpoint | When (origin-local) | Calls |
 |---|---|---|
@@ -77,9 +77,8 @@ Default is **`cadence=essential`**: about **8–11 AeroAPI result sets** per fli
 | `t_minus_1h` | T−1h of expected off | 2 |
 | `t_minus_30m` | T−30m of expected off (flight only, so a late gate change posts before boarding) | 1 |
 | `takeoff` | expected off + 30 min. If still at the gate, recheck every 30 min (departure-delayed, minutes past STD). Never jump to landing while on the ground. | 1 |
-| `landing` | expected arrival + 10 min. If still airborne, retry at `max(new ETA+10, now+20 min)`, capped; **never `final` while airborne**. | 1 |
-| on-block follow-up | about +20 min after `actual_in` / `actual_on` (arrival gate + baggage belt), then `done` | 1 |
-| `done` | after the on-block follow-up, diverted, or cancelled after the 30-min confirm | 0 |
+| `landing` | expected arrival + 10 min. If still airborne, retry at `max(new ETA+10, now+20 min)`, capped; **never `final` while airborne**. If on-block or runway-on is already published, this check is `final` (gate / terminal / belt included when present). | 1 |
+| `done` | landed (that landing check), diverted, or cancelled after the 30-min confirm | 0 |
 
 Nothing before T−24h (`too_early`). An estimate-only retime re-anchors T−3h / T−1h / T−30m to the new estimated departure. A schedule change is phrased `moved from HH:MM to HH:MM (ORIGIN time)`. Cancelled **shows as cancelled** on first sight, keeps the current checkpoint, rechecks once after 30 min, then `final`. Retryable upstream errors set `next_check` to 15 min, keep the checkpoint, and never put raw AeroAPI text in `summary`. Timeouts use a plain sentence (`The live status request timed out.`).
 
@@ -92,11 +91,10 @@ T-3h   06:40                      2 calls
 T-1h   08:40                      2 calls
 T-30m  09:10                      1 call
 takeoff 10:10 (STD+30)            1 call  (+ 30-min ground rechecks if still at the gate)
-landing expected arrival + 10     1 call  (+ 20-min airborne retries if needed)
-+20 min after on-block            1 call  then done
+landing expected arrival + 10     1 call  (final if landed; +20-min airborne retries if still in the air)
 ```
 
-~10 calls if the flight runs on time; a few more with ground or airborne holds.
+~9 calls if the flight runs on time; a few more with ground or airborne holds.
 
 ## Install and CLI
 

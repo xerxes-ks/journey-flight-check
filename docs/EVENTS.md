@@ -49,7 +49,7 @@ Silent checkpoints (no webhook) are normal. The cron still ran; nothing material
 
 ## Cadence (do not reimplement)
 
-The service follows the essential schedule: T−24h, T−6h, T−3h, T−1h, T−30m, takeoff, landing, then one +20 min on-block follow-up. About 8–11 AeroAPI calls per flight. You do not need to poll `/api/check` while a `tracking_id` is active.
+The service follows the essential schedule: T−24h, T−6h, T−3h, T−1h, T−30m, takeoff, landing. About 7–10 AeroAPI calls per flight (9 on time). The landing check that sees on-block or runway-on is final. You do not need to poll `/api/check` while a `tracking_id` is active.
 
 ## What the service does not store
 
