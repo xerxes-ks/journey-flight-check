@@ -8,7 +8,7 @@ import json
 from flightcheck.events import sign_body
 from flightcheck.mode import is_fixtures, resolve_now
 from flightcheck.routes import handle_tick, handle_track, handle_webhook_sink
-from flightcheck.store import MemoryStore, reset_process_memory, use_store
+from flightcheck.store import MemoryStore, namespaced_store, reset_process_memory, use_store
 from flightcheck.track import list_event_log
 
 
@@ -126,7 +126,7 @@ def test_track_tick_events_sink_with_now(monkeypatch):
         path="/api/tick",
     )
     assert status == 200, ticked
-    events = list_event_log(store, tid)
+    events = list_event_log(namespaced_store(store, "fixtures"), tid)
     assert any(e.get("event") == "tracking_started" for e in events)
     use_store(None)
 

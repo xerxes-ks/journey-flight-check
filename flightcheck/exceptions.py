@@ -26,6 +26,7 @@ HTTP_FOR_CODE = {
     "origin_mismatch": 404,
     "method_not_allowed": 405,
     "budget_exceeded": 402,
+    "conflict": 409,
     "rate_limited": 429,
     "storage_not_configured": 503,
     "storage_error": 503,
@@ -87,7 +88,28 @@ class BudgetExceeded(CheckError):
     """The configured per-call AeroAPI budget would be exceeded by the next request."""
 
     def __init__(self, message: str):
-        super().__init__(message, code="budget_exceeded")
+        super().__init__(message, code="budget_exceeded", http_status=402)
+
+
+class InvalidBudget(CheckError):
+    """A money limit was NaN, infinite, negative, or otherwise unusable."""
+
+    def __init__(self, message: str = "budget must be a finite nonnegative number"):
+        super().__init__(message, code="bad_request", http_status=400)
+
+
+class Conflict(CheckError):
+    """Idempotent retry with a different subscription fingerprint."""
+
+    def __init__(self, message: str = "subscription configuration conflict"):
+        super().__init__(message, code="conflict", http_status=409)
+
+
+class IsolationError(CheckError):
+    """Fixture tracking attempted against the live store namespace."""
+
+    def __init__(self, message: str = "fixture tracking cannot use the live store"):
+        super().__init__(message, code="forbidden", http_status=403)
 
 
 class InvalidDate(CheckError):

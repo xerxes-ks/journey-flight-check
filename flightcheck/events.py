@@ -5,8 +5,10 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import os
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Callable, Optional
 
@@ -31,6 +33,7 @@ EVENT_NAMES = (
 WATCHFUL = {"watch", "at_risk"}
 LANDED_PHASES = {"landed", "at_arrival_gate"}
 BACKOFF_S = (0.2, 0.6, 1.2)
+DELIVER_TIMEOUT_S = 3
 
 
 def sign_body(body: bytes | str, secret: str) -> str:
@@ -170,10 +173,32 @@ def event_payload(event: str, track: dict, result: dict) -> dict:
     }
 
 
-def post_json(url: str, body: bytes, headers: dict, timeout: int = 8) -> int:
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def webhook_allowed_hosts() -> set[str]:
+    raw = os.environ.get("FLIGHTCHECK_WEBHOOK_ALLOWED_HOSTS") or ""
+    hosts = {h.strip().lower() for h in raw.split(",") if h.strip()}
+    for key in ("VERCEL_URL", "VERCEL_BRANCH_URL", "VERCEL_PROJECT_PRODUCTION_URL"):
+        value = (os.environ.get(key) or "").strip()
+        if not value:
+            continue
+        host = value.split("://")[-1].split("/")[0].split(":")[0].lower()
+        if host:
+            hosts.add(host)
+    return hosts
+
+
+def _opener():
+    return urllib.request.build_opener(_NoRedirect)
+
+
+def post_json(url: str, body: bytes, headers: dict, timeout: int = DELIVER_TIMEOUT_S) -> int:
     req = urllib.request.Request(url, data=body, method="POST", headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with _opener().open(req, timeout=timeout) as resp:
             return int(resp.status)
     except urllib.error.HTTPError as exc:
         return int(exc.code)
@@ -186,8 +211,24 @@ def deliver_webhook(
     *,
     post: Callable = post_json,
     sleep: Callable = time.sleep,
-    attempts: int = 3,
+    attempts: int = 1,
 ) -> dict:
+    if not (secret or "").strip():
+        return {"ok": False, "http": 0, "attempts": 0, "skipped": "missing_secret"}
+    enforce = post is post_json
+    if enforce:
+        parsed = urllib.parse.urlparse(str(url or ""))
+        host = (parsed.hostname or "").lower()
+        scheme = parsed.scheme.lower()
+        loopback = host in {"127.0.0.1", "localhost", "::1"}
+        hosted = bool(os.environ.get("VERCEL_ENV"))
+        if scheme != "https" and not (scheme == "http" and loopback and not hosted):
+            return {"ok": False, "http": 0, "attempts": 0, "skipped": "https_required"}
+        allowed = webhook_allowed_hosts()
+        if loopback and not hosted:
+            allowed.add(host)
+        if not host or host not in allowed:
+            return {"ok": False, "http": 0, "attempts": 0, "skipped": "host_not_allowed"}
     body = json.dumps(payload, separators=(",", ":")).encode()
     headers = {
         "Content-Type": "application/json",
@@ -196,9 +237,10 @@ def deliver_webhook(
     }
     last_status = 0
     ok = False
+    i = 0
     for i in range(max(1, attempts)):
         try:
-            last_status = post(url, body, headers)
+            last_status = post(url, body, headers, timeout=DELIVER_TIMEOUT_S) if post is post_json else post(url, body, headers)
             if 200 <= int(last_status) < 300:
                 ok = True
                 break

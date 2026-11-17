@@ -103,6 +103,7 @@ def fixture_fetch(now=None):
             return 404, {"title": "Not Found"}
         return 200, _filter_window(deepcopy(body), params or {})
 
+    fetch._flightcheck_fixtures = True
     return fetch
 
 

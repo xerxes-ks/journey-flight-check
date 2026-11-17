@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -11,6 +12,7 @@ import pytest
 
 from flightcheck.exceptions import StorageError
 from flightcheck.store import (
+    StaleWrite,
     BLOB_API,
     BLOB_API_VERSION,
     BlobStore,
@@ -45,11 +47,16 @@ def _handler(state: FakeBlobState):
             n = int(self.headers.get("Content-Length") or 0)
             return self.rfile.read(n) if n else b""
 
-        def _send(self, status: int, payload, content_type="application/json"):
+        def _etag(self, body: bytes) -> str:
+            return hashlib.sha256(body or b"").hexdigest()[:16]
+
+        def _send(self, status: int, payload, content_type="application/json", extra=None):
             raw = payload if isinstance(payload, (bytes, bytearray)) else json.dumps(payload).encode()
             self.send_response(status)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(raw)))
+            for key, val in (extra or {}).items():
+                self.send_header(key, val)
             self.end_headers()
             self.wfile.write(raw)
 
@@ -66,12 +73,25 @@ def _handler(state: FakeBlobState):
                 self._send(400, {"error": "Cannot use public access on a private store"})
                 return
             pathname = (qs.get("pathname") or [parsed.path.lstrip("/")])[0]
+            current = state.objects.get(pathname)
+            match = (self.headers.get("x-if-match") or self.headers.get("If-Match") or "").strip().strip('"')
+            none = (self.headers.get("x-if-none-match") or self.headers.get("If-None-Match") or "").strip()
+            if match:
+                if current is None or self._etag(current) != match:
+                    self._send(412, {"error": "precondition failed"})
+                    return
+            if none == "*":
+                if current is not None:
+                    self._send(412, {"error": "precondition failed"})
+                    return
             state.objects[pathname] = body
+            etag = self._etag(body)
             self._send(200, {
                 "url": f"http://{self.headers.get('Host')}/{pathname}",
                 "pathname": pathname,
                 "contentType": "application/json",
-            })
+                "etag": etag,
+            }, extra={"ETag": etag})
 
         def do_GET(self):
             parsed = urlparse(self.path)
@@ -89,7 +109,9 @@ def _handler(state: FakeBlobState):
             if pathname not in state.objects:
                 self._send(404, {"error": "not found"})
                 return
-            self._send(200, state.objects[pathname], "application/json")
+            body = state.objects[pathname]
+            etag = self._etag(body)
+            self._send(200, body, "application/json", extra={"ETag": etag})
 
         def do_POST(self):
             parsed = urlparse(self.path)
@@ -217,6 +239,21 @@ def test_blob_put_without_access_header_is_storage_error(blob_server):
     assert exc.value.http_status == 503
     assert exc.value.to_dict()["retryable"] is False
     assert "public access" in str(exc.value).lower() or "private store" in str(exc.value).lower()
+
+
+def test_blob_if_match_rejects_competing_put(blob_server):
+    _, base = blob_server
+    a = BlobStore("vercel_blob_rw_teststore_secret", base_url=base)
+    path = "locks/tick.json"
+    a.put_json(path, {"holder": "a", "version": 1})
+    a.get_json(path)
+    old = a._etags[path]
+    a.put_json(path, {"holder": "a2", "version": 2}, if_match=old)
+    with pytest.raises(StaleWrite):
+        a.put_json(path, {"holder": "stale", "version": 3}, if_match=old)
+    assert a.get_json(path)["holder"] == "a2"
+    puts = [r for r in blob_server[0].requests if r[0] == "PUT"]
+    assert any((h.get("x-if-match") or h.get("X-If-Match")) for _, _, h, _ in puts)
 
 
 def test_blob_version_skips_stale_write(blob_server):

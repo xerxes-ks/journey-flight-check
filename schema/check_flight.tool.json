@@ -92,7 +92,7 @@
     "required": [
       "ok", "status", "band", "impact_band", "phase", "checkpoint", "attempts",
       "final", "summary", "flight", "inbound",
-      "prediction", "connection", "checked_at", "next_check_local",
+      "prediction", "connection", "connection_reason", "checked_at", "next_check_local",
       "next_check_in_minutes", "next_poll_min", "calls", "cost_usd_est", "error", "warning"
     ],
     "properties": {
@@ -132,6 +132,13 @@
           { "type": "null" },
           { "$ref": "#/$defs/connection" }
         ]
+      },
+      "connection_reason": {
+        "anyOf": [
+          { "type": "null" },
+          { "type": "string", "enum": ["untracked", "not_found"] }
+        ],
+        "description": "When onward was requested but connection is null: untracked (not looked up) or not_found (looked up, missing)."
       },
       "checked_at": {
         "type": "string",

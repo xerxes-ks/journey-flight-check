@@ -298,6 +298,7 @@ class CheckResult:
     phase: str = "scheduled"
     impact_band: Optional[str] = None
     attempts: int = 0
+    connection_reason: Optional[str] = None
 
     @property
     def status(self) -> str:
@@ -326,6 +327,7 @@ class CheckResult:
             "inbound": self.inbound.to_dict() if self.inbound else None,
             "prediction": self.prediction.to_dict(),
             "connection": self.connection.to_dict() if self.connection else None,
+            "connection_reason": self.connection_reason,
             "checked_at": self.checked_at,
             "next_check_local": self.next_check_local,
             "next_check_in_minutes": self.next_check_in_minutes,
