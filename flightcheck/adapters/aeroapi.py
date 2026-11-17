@@ -21,7 +21,7 @@ import urllib.request
 from typing import Optional
 from zoneinfo import ZoneInfo
 
-from ..exceptions import AeroAPIError, BudgetExceeded
+from ..exceptions import AeroAPIError, BudgetExceeded, OriginMismatch
 from ..model import (
     DEFAULT_COST_PER_CALL,
     DEFAULT_INBOUND_WINDOW_H,
@@ -184,11 +184,10 @@ class AeroAPIAdapter:
         flights = [f for f in flights if isinstance(f, dict)]
         if origin:
             origin = origin.upper()
-            matched = [
+            flights = [
                 f for f in flights
                 if ((f.get("origin") or {}).get("code_iata") or "").upper() == origin
             ]
-            flights = matched or flights
 
         def sched(f):
             return parse_time(f.get("scheduled_out") or f.get("scheduled_off"))
@@ -227,7 +226,17 @@ class AeroAPIAdapter:
             "ident_type": "designator",
         }
         body = self.call(f"/flights/{urllib.parse.quote(ident)}", params)
-        raw = self.pick_instance(body.get("flights") or [], day, origin)
+        flights = [f for f in (body.get("flights") or []) if isinstance(f, dict)]
+        if origin:
+            origin_u = origin.upper()
+            origin_matched = [
+                f for f in flights
+                if ((f.get("origin") or {}).get("code_iata") or "").upper() == origin_u
+            ]
+            if flights and not origin_matched:
+                raise OriginMismatch(ident, origin_u)
+            flights = origin_matched
+        raw = self.pick_instance(flights, day, origin=None)
         if not raw:
             return None
         flight = self.to_flight(raw)
@@ -304,7 +313,7 @@ class AeroAPIAdapter:
             ident_icao=ident_icao,
             fa_flight_id=f.get("fa_flight_id") or "",
             origin=origin.get("code_iata") or "",
-            destination=dest.get("code_iata") or "",
+            destination=_destination(dest.get("code_iata") or "", f, diverted),
             origin_tz=origin.get("timezone") or "UTC",
             dest_tz=dest.get("timezone") or "UTC",
             sched_out=parse_time(f.get("scheduled_out")),
@@ -325,10 +334,38 @@ class AeroAPIAdapter:
             status=status,
             cancelled=cancelled,
             diverted=diverted,
-            divert_to=(dest.get("code_iata") or "") if diverted else "",
+            divert_to=_divert_to(f, dest.get("code_iata") or "", diverted),
             source="aeroapi",
             live=True,
             inbound_fa_flight_id=f.get("inbound_fa_flight_id") or "",
             status_text=str(f.get("status") or ""),
             progress_percent=progress,
         )
+
+
+def _divert_airport(f: dict) -> str:
+    extra = f.get("diverted_to") or f.get("divert_to") or ""
+    if isinstance(extra, dict):
+        extra = extra.get("code_iata") or extra.get("code") or ""
+    return str(extra or "").upper()
+
+
+def _divert_to(f: dict, dest_iata: str, diverted: bool) -> str:
+    if not diverted:
+        return ""
+    return _divert_airport(f) or (dest_iata or "").upper()
+
+
+def _destination(dest_iata: str, f: dict, diverted: bool) -> str:
+    dest = dest_iata or ""
+    if not diverted:
+        return dest
+    divert = _divert_airport(f)
+    if divert and dest.upper() == divert:
+        # Simulate (and some fixtures) keep the original destination and
+        # send diverted_to separately. If they match, dest is the divert airport.
+        original = f.get("original_destination") or ""
+        if isinstance(original, dict):
+            original = original.get("code_iata") or original.get("code") or ""
+        return str(original or dest)
+    return dest

@@ -19,11 +19,16 @@
     pre { background: #111; color: #e8e8e8; padding: 12px; overflow: auto; font-size: 12px; border-radius: 6px; }
     .err { color: #a11; }
     code { font-size: 0.9em; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 0.8rem; border: 1px solid #ccc; background: #eee; }
+    .badge.ok { background: #e6f4ea; border-color: #8bc99a; color: #146c2e; }
+    .badge.bad { background: #fdecea; border-color: #e8a0a0; color: #a11; }
+    .clock { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+    .clock button { margin: 0; }
   </style>
 </head>
 <body>
   <h1>flightcheck test console</h1>
-  <p class="lead">Synthetic flights only. Token stays in this browser. Fixture mode is <strong>on by default</strong> so Check / Track / Tick do not call AeroAPI.</p>
+  <p class="lead">Synthetic flights only. Token stays in this browser. Fixture mode is <strong>on by default</strong> so Check / Track / Tick do not call AeroAPI. <span id="healthBadge" class="badge">health: …</span></p>
 
   <section>
     <label>Bearer token (<code>FLIGHTCHECK_TOKEN</code>)</label>
@@ -46,6 +51,14 @@
       <div>
         <label>now (ISO, fixtures only)</label>
         <input id="chkNow" value="2027-03-14T18:00:00Z" />
+        <div class="clock" id="clockStepper">
+          <button type="button" data-step="-360">−6h</button>
+          <button type="button" data-step="-60">−1h</button>
+          <button type="button" data-step="-15" id="clockMinus15">−15m</button>
+          <button type="button" data-step="15" id="clockPlus15">+15m</button>
+          <button type="button" data-step="60">+1h</button>
+          <button type="button" data-step="360">+6h</button>
+        </div>
       </div>
     </div>
     <button type="button" id="doCheck">POST /api/check</button>
@@ -102,6 +115,13 @@
     <button type="button" id="doUntrack">Untrack</button>
     <button type="button" id="doTick">POST /api/tick</button>
     <pre id="trOut">{}</pre>
+  </section>
+
+  <section>
+    <h2>Webhook sink inbox</h2>
+    <p>Last deliveries captured by <code>GET /api/webhook-sink</code>.</p>
+    <button type="button" id="doSink">Refresh inbox</button>
+    <pre id="sinkInbox">{}</pre>
   </section>
 
   <script>
@@ -190,6 +210,30 @@
       headers: headers(),
       body: JSON.stringify({ now: $("chkNow").value || undefined }),
     }));
+    $("doSink").onclick = () => show("sinkInbox", () => api("/api/webhook-sink", { headers: headers() }));
+    document.querySelectorAll("#clockStepper button").forEach((btn) => {
+      btn.onclick = () => {
+        const minutes = Number(btn.getAttribute("data-step") || 0);
+        const raw = $("chkNow").value.trim() || new Date().toISOString();
+        const t = new Date(raw);
+        if (Number.isNaN(t.getTime())) return;
+        t.setUTCMinutes(t.getUTCMinutes() + minutes);
+        $("chkNow").value = t.toISOString().replace(/\.\d{3}Z$/, "Z");
+      };
+    });
+    (async () => {
+      const badge = $("healthBadge");
+      try {
+        const res = await fetch("/api/health");
+        const body = await res.json();
+        const bits = ["health", body.ok ? "ok" : "down", body.storage, (body.sha || "").slice(0, 7)].filter(Boolean);
+        badge.textContent = bits.join(" · ");
+        badge.classList.add(body.ok ? "ok" : "bad");
+      } catch (e) {
+        badge.textContent = "health: unreachable";
+        badge.classList.add("bad");
+      }
+    })();
   </script>
 </body>
 </html>

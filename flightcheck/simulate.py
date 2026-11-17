@@ -218,7 +218,7 @@ def _mutate(clock: dict, scenario: str, now: dt.datetime, checkpoint: str) -> tu
         if now >= std + dt.timedelta(hours=1):
             f["diverted"] = True
             f["status"] = "Diverted"
-            f["destination"]["code_iata"] = "CDG"
+            f["diverted_to"] = "CDG"
 
     elif scenario == "retimed":
         if now >= std - dt.timedelta(hours=6):

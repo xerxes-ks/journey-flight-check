@@ -9,7 +9,7 @@ import sys
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlparse
 
-from .exceptions import error_dict
+from .exceptions import CheckError, error_dict, http_status_for
 from .sanitize import redact
 from .store import StorageNotConfigured
 
@@ -49,6 +49,11 @@ def wrap_errors(fn):
             return fn(*args, **kwargs)
         except StorageNotConfigured as exc:
             return 503, {"ok": False, "error": exc.to_dict()}
+        except CheckError as exc:
+            status = http_status_for(exc.code, default=200, http_status=exc.http_status)
+            payload = {"ok": False, "error": exc.to_dict()}
+            payload["error"]["message"] = redact(exc)
+            return status, payload
         except ValueError as exc:
             return 400, {"ok": False, "error": error_dict("bad_request", redact(exc))}
         except Exception as exc:

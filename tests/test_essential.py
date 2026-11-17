@@ -181,6 +181,8 @@ def test_cancelled_rechecks_then_final():
     assert second.final is True
     assert second.checkpoint == "done"
     assert second.next_check_local is None
+    assert "confirmed cancelled" in second.summary
+    assert "shows as cancelled" not in second.summary
 
 
 def test_inbound_cancelled_raises_watch():

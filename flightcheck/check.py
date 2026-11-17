@@ -226,8 +226,18 @@ def _band_word(band: str) -> str:
 
 def _ident_route(flight: Flight) -> str:
     name = flight.ident_iata or flight.ident
-    if flight.origin and flight.destination:
-        return f"{name} {flight.origin}→{flight.destination}"
+    dest = flight.destination
+    if (
+        flight.diverted
+        and flight.divert_to
+        and dest
+        and dest.upper() == flight.divert_to.upper()
+    ):
+        dest = ""
+    if flight.origin and dest:
+        return f"{name} {flight.origin}→{dest}"
+    if flight.origin:
+        return f"{name} {flight.origin}"
     return name
 
 
@@ -308,9 +318,14 @@ def _summarize(
             msg += " Live status is not queried yet."
         return _with_connection(msg, conn, onward_ident)
 
-    if error and error.get("code") in ("no_data", "flight_not_found"):
-        when = ticket_date or flight.origin or "the requested date"
-        return _with_connection(f"No live data for {name} on {when}.", conn, onward_ident)
+    if error and error.get("code") == "origin_mismatch":
+        return _with_connection(
+            error.get("message") or f"No matching {name} departure from the requested origin.",
+            conn,
+            onward_ident,
+        )
+    if error and error.get("code") in ("no_data", "flight_not_found", "not_found"):
+        return _with_connection("flight not found.", conn, onward_ident)
     if error and (flight.status in ("unknown",) or not flight.live):
         return _with_connection(f"Live status is temporarily unavailable for {name}.", conn, onward_ident)
 
@@ -318,7 +333,7 @@ def _summarize(
         return _with_connection(f"No live data for {name}.", conn, onward_ident)
     if flight.cancelled:
         if pred.final:
-            return _with_connection(f"{name} shows as cancelled.", conn, onward_ident)
+            return _with_connection(f"{name} is confirmed cancelled.", conn, onward_ident)
         return _with_connection(f"{name} shows as cancelled. Rechecking in 30 min.", conn, onward_ident)
     if flight.diverted:
         dest = flight.divert_to or "another airport"
@@ -572,10 +587,7 @@ def check_flight(req: CheckRequest | dict, *, fetch=None, adapter=None, now=None
     if flight is None:
         flight = _skeleton(ident, req.date, origin, status="unknown", tzname=tzname)
         if error is None:
-            error = error_dict(
-                "flight_not_found",
-                f"AeroAPI returned no flights for {ident} on {req.date}",
-            )
+            error = error_dict("flight_not_found", "flight not found")
 
     want_inbound = False
     probe_checkpoint = None

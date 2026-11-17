@@ -13,9 +13,34 @@ RETRYABLE_CODES = frozenset({
     "error",
 })
 
+# Token-gated routes share this 401 message (including /api/check).
+UNAUTH_MESSAGE = "missing or invalid token"
+
+# Application error codes → HTTP. Upstream 5xx stay 200 with a structured
+# error object so a tool-calling client always gets JSON, never a bare 502.
+HTTP_FOR_CODE = {
+    "unauthorized": 401,
+    "bad_request": 400,
+    "invalid_date": 400,
+    "not_found": 404,
+    "origin_mismatch": 404,
+    "method_not_allowed": 405,
+    "budget_exceeded": 402,
+    "rate_limited": 429,
+    "storage_not_configured": 503,
+    "storage_error": 503,
+    "forbidden": 403,
+}
+
 
 def retryable_for(code: str) -> bool:
     return (code or "") in RETRYABLE_CODES
+
+
+def http_status_for(code: str, default: int = 200, http_status: int = 0) -> int:
+    if http_status:
+        return int(http_status)
+    return HTTP_FOR_CODE.get(code or "", default)
 
 
 def error_code_for_http(status: int) -> str:
@@ -63,6 +88,36 @@ class BudgetExceeded(CheckError):
 
     def __init__(self, message: str):
         super().__init__(message, code="budget_exceeded")
+
+
+class InvalidDate(CheckError):
+    """Ticket date was not a YYYY-MM-DD calendar date."""
+
+    def __init__(self, message: str = "invalid date"):
+        super().__init__(message, code="invalid_date", http_status=400)
+
+
+class OriginMismatch(CheckError):
+    """Requested origin does not match any returned flight leg."""
+
+    def __init__(self, ident: str, origin: str):
+        super().__init__(
+            f"No {ident} departure from {origin}",
+            code="origin_mismatch",
+            http_status=404,
+        )
+
+
+class StorageError(CheckError):
+    """Blob/Redis config or permission failure. Not retryable."""
+
+    def __init__(self, message: str, http_status: int = 503, snippet: str = ""):
+        super().__init__(
+            message,
+            code="storage_error",
+            http_status=http_status or 503,
+            snippet=snippet,
+        )
 
 
 class AeroAPIError(CheckError):

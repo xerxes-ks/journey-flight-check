@@ -7,7 +7,7 @@ export BASE="https://YOUR_DEPLOYMENT"
 export FLIGHTCHECK_TOKEN="…"
 ```
 
-Preview deployments may be behind **Vercel Authentication**. `curl` without a bypass cookie or `x-vercel-protection-bypass` header gets an HTML login page, not JSON. `GET /api/health` is unauthenticated at the app layer but still blocked by that gate. See `docs/TESTING.md`.
+The production alias is public and token-gated. **Deployment / preview URLs** may be behind **Vercel Authentication**. `curl` against a preview without a bypass cookie or `x-vercel-protection-bypass` header gets an HTML login page, not JSON. `GET /api/health` is unauthenticated at the app layer but still blocked by that preview gate. See `docs/TESTING.md`.
 
 Synthetic fixtures only: `XX123` / `YY456` / `XX321`. Never send live trip data.
 
@@ -168,11 +168,14 @@ Static operator console (`public/test/index.html`). The page itself has no API a
 
 | code | HTTP | retryable | when |
 |---|---|---|---|
-| `unauthorized` | 401 | false | missing/wrong bearer |
+| `unauthorized` | 401 | false | missing/wrong bearer (`missing or invalid token`) |
 | `bad_request` | 400 | false | missing fields, invalid JSON |
+| `invalid_date` | 400 | false | ticket `date` is not YYYY-MM-DD |
 | `not_found` | 404 | false | unknown tracking_id or AeroAPI 404 |
-| `flight_not_found` | 200 | false | empty AeroAPI list |
+| `origin_mismatch` | 404 | false | requested origin matches no returned leg |
+| `flight_not_found` | 200 | false | empty AeroAPI list (`flight not found`) |
 | `storage_not_configured` | 503 | false | no `BLOB_READ_WRITE_TOKEN` (and not redis/memory) |
+| `storage_error` | 503 | false | Blob config/permission failure (private store PUT without `x-vercel-blob-access`) |
 | `budget_exceeded` | 402 | false | per-request AeroAPI cap |
 | `method_not_allowed` | 405 | false | wrong HTTP method |
 | `rate_limited` | 429 | true | AeroAPI 429 |

@@ -9,6 +9,7 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 
+from flightcheck.exceptions import StorageError
 from flightcheck.store import (
     BlobStore,
     MemoryStore,
@@ -57,6 +58,10 @@ def _handler(state: FakeBlobState):
             state.requests.append(("PUT", self.path, dict(self.headers), parsed.query))
             if not self._auth():
                 self._send(401, {"error": "unauthorized"})
+                return
+            access = (self.headers.get("x-vercel-blob-access") or "").lower()
+            if access != "private":
+                self._send(400, {"error": "Cannot use public access on a private store"})
                 return
             pathname = (qs.get("pathname") or [parsed.path.lstrip("/")])[0]
             state.objects[pathname] = body
@@ -130,13 +135,32 @@ def test_blob_put_get_list_delete_private_no_cache(blob_server):
     assert hdr.get("x-add-random-suffix") == "0"
     assert hdr.get("x-allow-overwrite") == "1"
     assert hdr.get("x-cache-control-max-age") == "0"
-    assert "access=private" in put[3]
+    assert hdr.get("x-vercel-blob-access") == "private"
     assert "addRandomSuffix=false" in put[3]
     get = next(x for x in methods if x[0] == "GET" and "prefix=" not in x[1])
     assert {k.lower(): v for k, v in get[2].items()}.get("authorization", "").startswith("Bearer ")
+    assert "cache=0" in get[1]
     store.delete("tracks/trk_ab.json")
     assert store.get_json("tracks/trk_ab.json") is None
     assert store.list_prefix("tracks/") == []
+
+
+def test_blob_put_without_access_header_is_storage_error(blob_server):
+    _, base = blob_server
+    store = BlobStore("vercel_blob_rw_teststore_secret", base_url=base)
+    orig = store._headers
+
+    def stripped(extra=None):
+        h = orig(extra)
+        return {k: v for k, v in h.items() if k.lower() != "x-vercel-blob-access"}
+
+    store._headers = stripped
+    with pytest.raises(StorageError) as exc:
+        store.put_json("tracks/nope.json", {"tracking_id": "nope"})
+    assert exc.value.code == "storage_error"
+    assert exc.value.http_status == 503
+    assert exc.value.to_dict()["retryable"] is False
+    assert "public access" in str(exc.value).lower() or "private store" in str(exc.value).lower()
 
 
 def test_blob_version_skips_stale_write(blob_server):
